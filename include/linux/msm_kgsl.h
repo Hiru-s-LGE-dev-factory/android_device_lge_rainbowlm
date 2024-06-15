@@ -2,6 +2,11 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
  */
+#ifdef CONFIG_MACH_LGE
+#include <uapi/linux/msm_kgsl.h>
+
+#else
+
 #ifndef _MSM_KGSL_H
 #define _MSM_KGSL_H
 
@@ -49,4 +54,4 @@ int kgsl_gpu_stat(struct kgsl_gpu_freq_stat *stats, u32 numfreq);
 int kgsl_gpu_frame_count(pid_t pid, u64 *frame_count);
 
 #endif /* _MSM_KGSL_H */
-
+#endif
