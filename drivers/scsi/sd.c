@@ -58,6 +58,9 @@
 #include <linux/t10-pi.h>
 #include <linux/uaccess.h>
 #include <asm/unaligned.h>
+#ifdef CONFIG_LFS_MM_BDI_STRICTLIMIT_DIRTY
+#include <linux/backing-dev.h>
+#endif
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -932,10 +935,8 @@ static blk_status_t sd_setup_write_zeroes_cmnd(struct scsi_cmnd *cmd)
 		}
 	}
 
-	if (sdp->no_write_same) {
-		rq->rq_flags |= RQF_QUIET;
+	if (sdp->no_write_same)
 		return BLK_STS_TARGET;
-	}
 
 	if (sdkp->ws16 || lba > 0xffffffff || nr_blocks > 0xffff)
 		return sd_setup_write_same16_cmnd(cmd, false);
@@ -3353,17 +3354,26 @@ static int sd_probe(struct device *dev)
 					     SD_MOD_TIMEOUT);
 	}
 
+#ifdef CONFIG_LFS_MM_BDI_STRICTLIMIT_DIRTY
+#ifdef CONFIG_LFS_SCSI_DEVICE_IDENTIFIER
+	if (!sdp->host->by_ufs) {
+		sdp->request_queue->backing_dev_info->capabilities |= BDI_CAP_STRICTLIMIT;
+		bdi_set_min_ratio(sdp->request_queue->backing_dev_info, 0);
+		bdi_set_max_ratio(sdp->request_queue->backing_dev_info, 10);
+	}
+#endif
+#endif
+
 	device_initialize(&sdkp->dev);
-	sdkp->dev.parent = get_device(dev);
+	sdkp->dev.parent = dev;
 	sdkp->dev.class = &sd_disk_class;
 	dev_set_name(&sdkp->dev, "%s", dev_name(dev));
 
 	error = device_add(&sdkp->dev);
-	if (error) {
-		put_device(&sdkp->dev);
-		goto out;
-	}
+	if (error)
+		goto out_free_index;
 
+	get_device(dev);
 	dev_set_drvdata(dev, sdkp);
 
 	gd->major = sd_major((index & 0xf0) >> 4);
@@ -3443,6 +3453,17 @@ static int sd_remove(struct device *dev)
 {
 	struct scsi_disk *sdkp;
 	dev_t devt;
+
+#ifdef CONFIG_LFS_MM_BDI_STRICTLIMIT_DIRTY
+#ifdef CONFIG_LFS_SCSI_DEVICE_IDENTIFIER
+	struct scsi_device *sdp;
+	sdp = to_scsi_device(dev);
+	if (sdp && sdp->request_queue && !sdp->host->by_ufs) {
+		bdi_set_min_ratio(sdp->request_queue->backing_dev_info, 0);
+		bdi_set_max_ratio(sdp->request_queue->backing_dev_info, 100);
+	}
+#endif
+#endif
 
 	sdkp = dev_get_drvdata(dev);
 	devt = disk_devt(sdkp->disk);

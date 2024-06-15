@@ -1,13 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2012-2014, 2016, 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, 2016, 2018-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __MSM_RTB_H__
 #define __MSM_RTB_H__
 
+#if defined(CONFIG_MACH_LGE)
+#include <asm/io.h>
+#else
 #ifdef CONFIG_QCOM_RTB_QGKI
 #include <asm/io.h>
+#endif
 #endif
 
 /*
@@ -125,16 +129,6 @@ int uncached_logk(enum logk_event_type log_type, void *data);
 	__r; \
 	})
 
-#ifdef CONFIG_ARM
-#define readb_no_log(c) \
-	({ u8  __v = readb_relaxed_no_log(c); __iormb(); __v; })
-#define readw_no_log(c) \
-	({ u16 __v = readw_relaxed_no_log(c); __iormb(); __v; })
-#define readl_no_log(c) \
-	({ u32 __v = readl_relaxed_no_log(c); __iormb(); __v; })
-#define readq_no_log(c) \
-	({ u64 __v = readq_relaxed_no_log(c); __iormb(); __v; })
-#else
 #define readb_no_log(c) \
 	({ u8  __v = readb_relaxed_no_log(c); __iormb(__v); __v; })
 #define readw_no_log(c) \
@@ -143,7 +137,6 @@ int uncached_logk(enum logk_event_type log_type, void *data);
 	({ u32 __v = readl_relaxed_no_log(c); __iormb(__v); __v; })
 #define readq_no_log(c) \
 	({ u64 __v = readq_relaxed_no_log(c); __iormb(__v); __v; })
-#endif
 
 #define __raw_write_logged(v, a, _t) ({ \
 	int _ret; \

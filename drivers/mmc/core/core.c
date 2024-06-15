@@ -612,12 +612,6 @@ static int mmc_devfreq_create_freq_table(struct mmc_host *host)
 		break;
 	}
 
-	if (mmc_card_sd(host->card) && (clk_scaling->freq_table_sz < 2)) {
-		clk_scaling->freq_table[clk_scaling->freq_table_sz] =
-				host->card->clk_scaling_highest;
-		clk_scaling->freq_table_sz++;
-	}
-
 out:
 	/**
 	 * devfreq requires unsigned long type freq_table while the
@@ -1522,7 +1516,15 @@ void mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card)
 			 */
 			limit_us = 3000000;
 		else
+			#ifdef CONFIG_LFS_MMC
+			/* LGE_CHANGE, Although we already applied enough time,
+			 * timeout-error occurs until now with several-ultimate-crappy-memory.
+			 * So, we give more time than before.
+			 */
+			limit_us = 300000;
+			#else
 			limit_us = 100000;
+			#endif
 
 		/*
 		 * SDHC cards always use these fixed values.
@@ -1644,47 +1646,6 @@ int __mmc_claim_host(struct mmc_host *host, struct mmc_ctx *ctx,
 }
 EXPORT_SYMBOL(__mmc_claim_host);
 
-#if defined(CONFIG_SDC_QTI)
-/**
- *   mmc_try_claim_host - try exclusively to claim a host
- *   and keep trying for given time, with a gap of 10ms
- *   @host: mmc host to claim
- *   @dealy_ms: delay in ms
- *
- *   Returns %1 if the host is claimed, %0 otherwise.
- */
-int mmc_try_claim_host(struct mmc_host *host, struct mmc_ctx *ctx,
-		     unsigned int delay_ms)
-{
-	int claimed_host = 0;
-	struct task_struct *task = ctx ? NULL : current;
-	unsigned long flags;
-	int retry_cnt = delay_ms/10;
-	bool pm = false;
-
-	do {
-		spin_lock_irqsave(&host->lock, flags);
-		if (!host->claimed || mmc_ctx_matches(host, ctx, task)) {
-			host->claimed = 1;
-			mmc_ctx_set_claimer(host, ctx, task);
-			host->claim_cnt += 1;
-			claimed_host = 1;
-			if (host->claim_cnt == 1)
-				pm = true;
-		}
-		spin_unlock_irqrestore(&host->lock, flags);
-		if (!claimed_host)
-			mmc_delay(10);
-	} while (!claimed_host && retry_cnt--);
-
-	if (pm)
-		pm_runtime_get_sync(mmc_dev(host));
-
-	return claimed_host;
-}
-EXPORT_SYMBOL(mmc_try_claim_host);
-#endif
-
 /**
  *	mmc_release_host - release a host
  *	@host: mmc host to release
@@ -1804,14 +1765,11 @@ int mmc_execute_tuning(struct mmc_card *card)
 
 	err = host->ops->execute_tuning(host, opcode);
 
-	if (err) {
+	if (err)
 		pr_err("%s: tuning execution failed: %d\n",
 			mmc_hostname(host), err);
-	} else {
-		host->retune_now = 0;
-		host->need_retune = 0;
+	else
 		mmc_retune_enable(host);
-	}
 
 	return err;
 }
@@ -2075,7 +2033,7 @@ int mmc_set_uhs_voltage(struct mmc_host *host, u32 ocr)
 
 	err = mmc_wait_for_cmd(host, &cmd, 0);
 	if (err)
-		goto power_cycle;
+		return err;
 
 	if (!mmc_host_is_spi(host) && (cmd.resp[0] & R1_ERROR))
 		return -EIO;
@@ -2212,13 +2170,28 @@ void mmc_power_up(struct mmc_host *host, u32 ocr)
 	 * This delay must be at least 74 clock sizes, or 1 ms, or the
 	 * time required to reach a stable voltage.
 	 */
+#ifdef CONFIG_LFS_MMC
+	/* LGE_CHANGE, Augmenting delay-time for some crappy card.
+	 */
+	mmc_delay(host->ios.power_delay_ms * 2);
+#else
 	mmc_delay(host->ios.power_delay_ms);
+#endif
 }
 
 void mmc_power_off(struct mmc_host *host)
 {
 	if (host->ios.power_mode == MMC_POWER_OFF)
+	#ifdef CONFIG_LFS_MMC
+	/* If it is already power-off, skip below.
+	 */
+	{
+		printk(KERN_INFO "[LGE][MMC][%-18s( )] host->index:%d, already power-off, skip below\n", __func__, host->index);
 		return;
+	}
+	#else
+		return;
+	#endif
 
 	mmc_pwrseq_power_off(host);
 
@@ -2323,6 +2296,9 @@ void mmc_detach_bus(struct mmc_host *host)
 	mmc_bus_put(host);
 }
 
+#ifdef CONFIG_LFS_MMC
+unsigned int is_damaged_sd = 0;
+#endif
 void _mmc_detect_change(struct mmc_host *host, unsigned long delay, bool cd_irq)
 {
 	/*
@@ -2333,8 +2309,26 @@ void _mmc_detect_change(struct mmc_host *host, unsigned long delay, bool cd_irq)
 		device_can_wakeup(mmc_dev(host)))
 		pm_wakeup_event(mmc_dev(host), 5000);
 
+#ifdef CONFIG_LFS_MMC
+	if (mmc_card_is_removable(host) && is_damaged_sd) {
+		if (host->claimed || host->claim_cnt > 0) {
+			printk(KERN_INFO "[LGE][MMC][%-18s( )] already claimed(%u), claim_cnt(%d), claimer(%s)\n",
+				__func__, host->claimed, host->claim_cnt,
+				(host->claimer && host->claimer->task) ? host->claimer->task->comm : "null");
+		}
+		mmc_claim_host(host);
+		mmc_release_host(host);
+		goto skip_detect;
+	}
+#endif
+
 	host->detect_change = 1;
 	mmc_schedule_delayed_work(&host->detect, delay);
+
+#ifdef CONFIG_LFS_MMC
+skip_detect:
+	return;
+#endif
 }
 
 /**
@@ -3134,6 +3128,10 @@ void mmc_rescan(struct work_struct *work)
 {
 	struct mmc_host *host =
 		container_of(work, struct mmc_host, detect.work);
+
+#ifdef CONFIG_LFS_MMC
+	int err = 0;
+#endif
 	int i;
 
 	if (host->rescan_disable)
@@ -3157,6 +3155,19 @@ void mmc_rescan(struct work_struct *work)
 	if (host->bus_ops && !host->bus_dead)
 		host->bus_ops->detect(host);
 
+#if defined(CONFIG_SDC_QTI)
+#ifdef CONFIG_LFS_MMC
+	if (host->corrupted_card) {
+		/* bug fix : bus_ops should be NULL to rescan new sd card.*/
+		mmc_bus_put(host);
+		return;
+	}
+#else
+	if (host->corrupted_card)
+		return;
+#endif
+#endif
+
 	host->detect_change = 0;
 
 	/*
@@ -3178,11 +3189,6 @@ void mmc_rescan(struct work_struct *work)
 	 */
 	mmc_bus_put(host);
 
-#if defined(CONFIG_SDC_QTI)
-	if (host->corrupted_card)
-		goto out;
-#endif
-
 	mmc_claim_host(host);
 	if (mmc_card_is_removable(host) && host->ops->get_cd &&
 			host->ops->get_cd(host) == 0) {
@@ -3192,7 +3198,13 @@ void mmc_rescan(struct work_struct *work)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(freqs); i++) {
+
+#ifdef CONFIG_LFS_MMC
+	/* keep last error */
+		if (!(err = mmc_rescan_try_freq(host, max(freqs[i], host->f_min))))
+#else
 		if (!mmc_rescan_try_freq(host, max(freqs[i], host->f_min)))
+#endif
 			break;
 		if (freqs[i] <= host->f_min)
 			break;
@@ -3202,6 +3214,13 @@ void mmc_rescan(struct work_struct *work)
 #endif
 	mmc_release_host(host);
 
+#ifdef CONFIG_LFS_MMC
+	if (err == -EIO && !(host->caps & MMC_CAP_NONREMOVABLE))
+	{
+		printk(KERN_INFO "[LGE][MMC][%-18s( )] mmc%d: SDcard is damaged or not exists\n", __func__, host->index);
+		is_damaged_sd = 1;
+	}
+#endif
  out:
 	if (host->caps & MMC_CAP_NEEDS_POLL)
 		mmc_schedule_delayed_work(&host->detect, HZ);
@@ -3223,7 +3242,7 @@ void mmc_start_host(struct mmc_host *host)
 	_mmc_detect_change(host, 0, false);
 }
 
-void __mmc_stop_host(struct mmc_host *host)
+void mmc_stop_host(struct mmc_host *host)
 {
 	if (host->slot.cd_irq >= 0) {
 		mmc_gpio_set_cd_wake(host, false);
@@ -3232,11 +3251,6 @@ void __mmc_stop_host(struct mmc_host *host)
 
 	host->rescan_disable = 1;
 	cancel_delayed_work_sync(&host->detect);
-}
-
-void mmc_stop_host(struct mmc_host *host)
-{
-	__mmc_stop_host(host);
 
 	/* clear pm flags now and let card drivers set them as needed */
 	host->pm_flags = 0;
@@ -3258,6 +3272,80 @@ void mmc_stop_host(struct mmc_host *host)
 	mmc_power_off(host);
 	mmc_release_host(host);
 }
+
+#ifdef CONFIG_PM_SLEEP
+/* Do the card removal on suspend if card is assumed removeable
+ * Do that in pm notifier while userspace isn't yet frozen, so we will be able
+   to sync the card.
+*/
+static int mmc_pm_notify(struct notifier_block *notify_block,
+			unsigned long mode, void *unused)
+{
+	struct mmc_host *host = container_of(
+		notify_block, struct mmc_host, pm_notify);
+	unsigned long flags;
+	int err = 0;
+
+	switch (mode) {
+	case PM_HIBERNATION_PREPARE:
+	case PM_SUSPEND_PREPARE:
+	case PM_RESTORE_PREPARE:
+		spin_lock_irqsave(&host->lock, flags);
+		host->rescan_disable = 1;
+		spin_unlock_irqrestore(&host->lock, flags);
+		cancel_delayed_work_sync(&host->detect);
+
+		if (!host->bus_ops)
+			break;
+
+		/* Validate prerequisites for suspend */
+		if (host->bus_ops->pre_suspend)
+			err = host->bus_ops->pre_suspend(host);
+		if (!err)
+			break;
+
+		if (!mmc_card_is_removable(host)) {
+			dev_warn(mmc_dev(host),
+				 "pre_suspend failed for non-removable host: "
+				 "%d\n", err);
+			/* Avoid removing non-removable hosts */
+			break;
+		}
+
+		/* Calling bus_ops->remove() with a claimed host can deadlock */
+		host->bus_ops->remove(host);
+		mmc_claim_host(host);
+		mmc_detach_bus(host);
+		mmc_power_off(host);
+		mmc_release_host(host);
+		host->pm_flags = 0;
+		break;
+
+	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
+	case PM_POST_RESTORE:
+
+		spin_lock_irqsave(&host->lock, flags);
+		host->rescan_disable = 0;
+		spin_unlock_irqrestore(&host->lock, flags);
+		_mmc_detect_change(host, 0, false);
+
+	}
+
+	return 0;
+}
+
+void mmc_register_pm_notifier(struct mmc_host *host)
+{
+	host->pm_notify.notifier_call = mmc_pm_notify;
+	register_pm_notifier(&host->pm_notify);
+}
+
+void mmc_unregister_pm_notifier(struct mmc_host *host)
+{
+	unregister_pm_notifier(&host->pm_notify);
+}
+#endif
 
 static int __init mmc_init(void)
 {

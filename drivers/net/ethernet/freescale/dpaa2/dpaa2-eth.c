@@ -2654,10 +2654,8 @@ static int setup_dpni(struct fsl_mc_device *ls_dev)
 
 	priv->cls_rules = devm_kzalloc(dev, sizeof(struct dpaa2_eth_cls_rule) *
 				       dpaa2_eth_fs_count(priv), GFP_KERNEL);
-	if (!priv->cls_rules) {
-		err = -ENOMEM;
+	if (!priv->cls_rules)
 		goto close;
-	}
 
 	return 0;
 
@@ -3616,9 +3614,9 @@ static int dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 
 	fsl_mc_portal_free(priv->mc_io);
 
-	dev_dbg(net_dev->dev.parent, "Removed interface %s\n", net_dev->name);
-
 	free_netdev(net_dev);
+
+	dev_dbg(net_dev->dev.parent, "Removed interface %s\n", net_dev->name);
 
 	return 0;
 }

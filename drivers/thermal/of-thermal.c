@@ -21,6 +21,10 @@
 
 #include "thermal_core.h"
 
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
+#include <soc/qcom/lge/board_lge.h>
+#endif
+
 /***   Private data structures to represent thermal device tree data ***/
 
 /**
@@ -733,7 +737,6 @@ static void handle_thermal_trip(struct device *dev,
 	int idx = 0;
 	struct __sensor_param *sens_param = NULL;
 	bool notify = false;
-	unsigned long tz_status_mask = 0;
 
 	idx = find_sensor_index(dev, data);
 	if (idx < 0)
@@ -750,7 +753,6 @@ static void handle_thermal_trip(struct device *dev,
 			thermal_zone_device_update(zone,
 				THERMAL_EVENT_UNSPECIFIED);
 		} else {
-			set_bit(idx, &tz_status_mask);
 			if (!of_thermal_is_trips_triggered(zone, trip_temp))
 				continue;
 			notify = true;
@@ -763,15 +765,9 @@ static void handle_thermal_trip(struct device *dev,
 	 * It is better to notify at least one thermal zone if trip is violated
 	 * for none.
 	 */
-	if (temp_valid && !notify) {
-		idx = find_first_bit(&tz_status_mask, sens_param->tz_cnt);
-		if (idx < sens_param->tz_cnt) {
-			data = sens_param->tz_list[idx];
-			zone = data->tzd;
-			thermal_zone_device_update_temp(zone,
-				THERMAL_EVENT_UNSPECIFIED, trip_temp);
-		}
-	}
+	if (temp_valid && !notify)
+		thermal_zone_device_update_temp(tzd, THERMAL_EVENT_UNSPECIFIED,
+				trip_temp);
 }
 
 /*
@@ -1349,17 +1345,14 @@ static int thermal_of_populate_bind_params(struct device_node *np,
 
 	count = of_count_phandle_with_args(np, "cooling-device",
 					   "#cooling-cells");
-	if (count <= 0) {
+	if (!count) {
 		pr_err("Add a cooling_device property with at least one device\n");
-		ret = -ENOENT;
 		goto end;
 	}
 
 	__tcbp = kcalloc(count, sizeof(*__tcbp), GFP_KERNEL);
-	if (!__tcbp) {
-		ret = -ENOMEM;
+	if (!__tcbp)
 		goto end;
-	}
 
 	for (i = 0; i < count; i++) {
 		ret = of_parse_phandle_with_args(np, "cooling-device",
@@ -1825,6 +1818,11 @@ int __init of_parse_thermal_zones(void)
 	struct __thermal_zone *tz;
 	struct thermal_zone_device_ops *ops;
 
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
+	enum lge_sku_carrier_type sku_carrier = HW_SKU_MAX;
+	sku_carrier = lge_get_sku_carrier();
+#endif
+
 	np = of_find_node_by_name(NULL, "thermal-zones");
 	if (!np) {
 		pr_debug("unable to find thermal zones\n");
@@ -1840,6 +1838,15 @@ int __init of_parse_thermal_zones(void)
 		const char *governor_name;
 #endif
 
+#ifdef CONFIG_LGE_ONE_BINARY_SKU
+		if (!strncmp(child->name, "qtm-", strlen("qtm-"))
+			|| !strncmp(child->name, "sdr-", strlen("sdr-"))) {
+			if (sku_carrier != HW_SKU_NA_CDMA_VZW) {
+				pr_info("skip %s thermal zone register\n", child->name);
+				continue;
+			}
+		}
+#endif
 		tz = thermal_of_build_thermal_zone(child);
 		if (IS_ERR(tz)) {
 			pr_err("failed to build thermal zone %pKOFn: %ld\n",

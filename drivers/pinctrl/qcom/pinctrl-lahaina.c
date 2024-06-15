@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/pinctrl.h>
+#ifdef CONFIG_LGE_PM
+#include <linux/slab.h>
+#endif
 
 #include "pinctrl-msm.h"
 
@@ -1286,7 +1289,7 @@ static const char * const qup5_groups[] = {
 	"gpio24", "gpio25", "gpio26", "gpio27",
 };
 static const char * const qup6_groups[] = {
-	"gpio28", "gpio29", "gpio30", "gpio31", "gpio6",
+	"gpio28", "gpio29", "gpio30", "gpio31",
 };
 static const char * const qup7_groups[] = {
 	"gpio32", "gpio33", "gpio34", "gpio35",
@@ -1609,7 +1612,7 @@ static const struct msm_pingroup lahaina_groups[] = {
 	[3] = PINGROUP(3, qup13, qup_l5, NA, NA, NA, NA, NA, NA, NA, 0, -1),
 	[4] = PINGROUP(4, qup0, NA, NA, NA, NA, NA, NA, NA, NA, 0, -1),
 	[5] = PINGROUP(5, qup0, NA, NA, NA, NA, NA, NA, NA, NA, 0, -1),
-	[6] = PINGROUP(6, qup0, qup6, NA, NA, NA, NA, NA, NA, NA, 0, -1),
+	[6] = PINGROUP(6, qup0, qup_l4, NA, NA, NA, NA, NA, NA, NA, 0, -1),
 	[7] = PINGROUP(7, qup0, qup_l5, NA, NA, NA, NA, NA, NA, NA, 0xCB000, 0),
 	[8] = PINGROUP(8, qup1, NA, NA, NA, NA, NA, NA, NA, NA, 0, -1),
 	[9] = PINGROUP(9, qup1, NA, NA, NA, NA, NA, NA, NA, NA, 0, -1),
@@ -1937,9 +1940,23 @@ static const struct msm_pingroup lahaina_groups[] = {
 	[206] = SDC_QDSD_PINGROUP(sdc2_data, 0x1cf000, 9, 0),
 };
 
+#if defined (CONFIG_LGE_MME_TEST)
 static const int lahaina_reserved_gpios[] = {
 	52, 53, 54, 55, 56, 57, 58, 59, -1
 };
+#elif defined (CONFIG_LGE_RESERVED_GPIO_BLM)
+#define MAX_RESERVED_GPIOS 32
+static int lahaina_reserved_gpios[MAX_RESERVED_GPIOS] = { -1,
+};
+#elif defined (CONFIG_LGE_RESERVED_GPIO_RAINBOWLM)
+#define MAX_RESERVED_GPIOS 32
+static int lahaina_reserved_gpios[MAX_RESERVED_GPIOS] = { -1,
+};
+#else
+static const int lahaina_reserved_gpios[] = {
+	52, 53, 54, 55, 56, 57, 58, 59, -1
+};
+#endif
 
 static struct pinctrl_qup lahaina_qup_regs[] = {
 	QUP_I3C(8, QUP_I3C_8_MODE_OFFSET),
@@ -1947,24 +1964,66 @@ static struct pinctrl_qup lahaina_qup_regs[] = {
 	QUP_I3C(15, QUP_I3C_15_MODE_OFFSET),
 };
 
+#ifdef CONFIG_MACH_LAHAINA_RAINBOWLM
 static const struct msm_gpio_wakeirq_map lahaina_pdc_map[] = {
-	{ 2, 117 }, { 7, 82 }, { 11, 83 }, { 14, 80 }, { 15, 146 }, { 19, 121 },
-	{ 23, 84 }, { 26, 86 }, { 27, 75 }, { 31, 85 }, { 32, 97 }, { 34, 98 },
-	{ 35, 131 }, { 36, 79 }, { 38, 99 }, { 39, 92 }, { 40, 101 }, { 43, 137 },
-	{ 44, 102 }, { 46, 96 }, { 47, 93 }, { 50, 108 }, { 51, 127 }, { 55, 128 },
-	{ 56, 81 }, { 59, 112 }, { 60, 119 }, { 63, 73 }, { 67, 74 }, { 71, 134 },
-	{ 75, 103 }, { 79, 104 }, { 80, 126 }, { 81, 139 }, { 82, 140 }, { 83, 141 },
-	{ 84, 124 }, { 85, 109 }, { 86, 143 }, { 87, 138 }, { 88, 122 }, { 89, 113 },
-	{ 90, 114 }, { 91, 115 }, { 92, 76 }, { 95, 147 }, { 96, 148 }, { 98, 149 },
-	{ 99, 150 }, { 115, 125 }, { 116, 106 }, { 117, 105 }, { 118, 116 }, { 119, 123 },
-	{ 130, 145 }, { 136, 72 }, { 140, 100 }, { 151, 110 }, { 153, 95 }, { 155, 107 },
-	{ 156, 94 }, { 157, 111 }, { 159, 118 }, { 162, 77 }, { 165, 78 }, { 169, 130 },
-	{ 172, 132 }, { 174, 87 }, { 175, 88 }, { 177, 89 }, { 179, 120 }, { 180, 129 },
-	{ 183, 90 }, { 185, 136 }, { 187, 142 }, { 190, 144 }, { 198, 91 }, { 200, 133 },
-	{ 202, 135 },
+	{ 2, 117 }, { 7, 82 }, { 15, 146 },
+	{ 23, 84 },
+	{ 36, 79 }, { 38, 99 },
+	{ 39, 92 }, { 40, 101 }, { 44, 102 }, { 46, 96 },
+	{ 47, 93 }, { 55, 128 },
+	{ 60, 119 }, { 67, 74 }, { 71, 134 },
+	{ 80, 126 }, { 81, 139 }, { 82, 140 },
+	{ 83, 141 }, { 87, 138 },
+	{ 88, 122 }, { 89, 113 }, { 92, 76 },
+	{ 95, 147 }, { 96, 148 }, { 98, 149 }, { 99, 150 },
+	{ 118, 116 }, { 130, 145 },
+	{ 136, 72 }, { 140, 100 }, { 153, 95 },
+	{ 157, 111 }, { 159, 118 }, { 162, 77 }, { 165, 78 },
+	{ 169, 70 }, { 172, 132 },
+	{ 187, 142 },
+	{ 190, 144 }, { 202, 135 },
 };
+#elif defined(CONFIG_MACH_LAHAINA_BLM)
+static const struct msm_gpio_wakeirq_map lahaina_pdc_map[] = {
+	{ 2, 117 }, { 11, 83 },
+	{ 23, 84 },
+	{ 36, 79 }, { 38, 99 },
+	{ 40, 101 }, { 44, 102 }, { 46, 96 },
+	{ 47, 93 }, { 55, 128 }, { 56, 81 },
+	{ 60, 119 }, { 67, 74 }, { 71, 134 },
+	{ 79, 104 }, { 80, 126 }, { 81, 139 }, { 82, 140 },
+	{ 83, 141 }, { 84, 124 }, { 87, 138 },
+	{ 89, 113 }, { 90, 114 }, { 91, 115 },
+	{ 95, 147 }, { 96, 148 }, { 98, 149 }, { 99, 150 },
+	{ 116, 106 }, { 117, 105 }, { 118, 116 }, { 130, 145 },
+	{ 140, 100 }, { 153, 95 }, { 155, 107 },
+	{ 157, 111 }, { 159, 118 }, { 162, 77 }, { 165, 78 },
+	{ 169, 70 }, { 172, 132 },
+	{ 187, 142 },
+	{ 190, 144 }, { 202, 135 },
+};
+#else
+static const struct msm_gpio_wakeirq_map lahaina_pdc_map[] = {
+	{ 2, 117 }, { 7, 82 }, { 11, 83 }, { 14, 80 }, { 15, 146 },
+	{ 19, 121 }, { 23, 84 }, { 26, 86 }, { 27, 75 }, { 31, 85 },
+	{ 32, 97 }, { 34, 98 }, { 35, 131 }, { 36, 79 }, { 38, 99 },
+	{ 39, 92 }, { 40, 101 }, { 43, 137 }, { 44, 102 }, { 46, 96 },
+	{ 47, 93 }, { 50, 108 }, { 51, 127 }, { 55, 128 }, { 56, 81 },
+	{ 59, 112 }, { 60, 119 }, { 63, 73 }, { 67, 74 }, { 71, 134 },
+	{ 75, 103 }, { 79, 104 }, { 80, 126 }, { 81, 139 }, { 82, 140 },
+	{ 83, 141 }, { 84, 124 }, { 85, 109 }, { 86, 143 }, { 87, 138 },
+	{ 88, 122 }, { 89, 113 }, { 90, 114 }, { 91, 115 }, { 92, 76 },
+	{ 95, 147 }, { 96, 148 }, { 98, 149 }, { 99, 150 }, { 115, 125 },
+	{ 116, 106 }, { 117, 105 }, { 118, 116 }, { 119, 123 }, { 130, 145 },
+	{ 136, 72 }, { 140, 100 }, { 151, 110 }, { 153, 95 }, { 155, 107 },
+	{ 156, 94 }, { 157, 111 }, { 159, 118 }, { 162, 77 }, { 165, 78 },
+	{ 169, 70 }, { 172, 132 }, { 174, 87 }, { 175, 88 }, { 177, 89 },
+	{ 179, 120 }, { 180, 129 }, { 183, 90 }, { 185, 136 }, { 187, 142 },
+	{ 190, 144 }, { 198, 91 }, { 200, 133 }, { 202, 135 },
+};
+#endif
 
-static struct msm_pinctrl_soc_data lahaina_pinctrl = {
+static const struct msm_pinctrl_soc_data lahaina_pinctrl = {
 	.pins = lahaina_pins,
 	.npins = ARRAY_SIZE(lahaina_pins),
 	.functions = lahaina_functions,
@@ -1979,62 +2038,141 @@ static struct msm_pinctrl_soc_data lahaina_pinctrl = {
 	.nwakeirq_map = ARRAY_SIZE(lahaina_pdc_map),
 };
 
+#ifdef CONFIG_LGE_PM
+static int *access_denied_list;
+static int access_denied_cnt;
+
+bool msm_gpio_check_access(int gpio)
+{
+	int i = 0;
+
+	for (i = 0; i < access_denied_cnt; i++) {
+		if (access_denied_list[i] == gpio)
+			return false;
+	}
+	return true;
+}
+EXPORT_SYMBOL(msm_gpio_check_access);
+#endif
+
+#if !defined(CONFIG_LGE_MME_TEST) && (defined (CONFIG_LGE_RESERVED_GPIO_BLM) || defined (CONFIG_LGE_RESERVED_GPIO_RAINBOWLM))
+static int set_lahaina_reserved_gpios(struct platform_device *pdev)
+{
+	int len = 0;
+	int rc = 0;
+	int i = 0;
+	struct property *gpios;
+	int *lahaina_reserved_list;
+
+	if (!pdev->dev.of_node) {
+		return -1;
+	}
+
+	gpios = of_find_property(pdev->dev.of_node, "lge,lahaina-reserved-gpios", &len);
+	if (!gpios) {
+		printk(KERN_ERR "cannot get lahaina-reserved-gpios property\n");
+		return -1;
+	}
+
+	len /= sizeof(u32);
+	if (len < 1) {
+		printk(KERN_ERR "lahaina-reserved-gpios length is abnormal, %d\n", len);
+		return -1;
+	}
+
+	printk(KERN_ERR "lge lahaina-reserved-gpios, %d\n", len);
+
+	lahaina_reserved_list = devm_kmalloc_array(&pdev->dev, len, sizeof(int), GFP_KERNEL);
+	if (!lahaina_reserved_list) {
+		printk(KERN_ERR "lahaina_reserved_list array malloc failed\n");
+		return -1;
+	}
+
+	rc = of_property_read_u32_array(pdev->dev.of_node,
+			"lge,lahaina-reserved-gpios", lahaina_reserved_list, len);
+	if (rc) {
+		printk(KERN_ERR "property array read fail, %d\n", rc);
+		kfree(lahaina_reserved_list);
+		return -1;
+	}
+
+	for (i = 0; i < len && i < MAX_RESERVED_GPIOS -2; i++) {
+		lahaina_reserved_gpios[i] = lahaina_reserved_list[i];
+		printk(KERN_ERR "lahaina_reserved_list[%d] = %d\n", i, lahaina_reserved_list[i]);
+	}
+	lahaina_reserved_gpios[i] = -1;
+
+	return 0;
+}
+#endif
 /* By default, all the gpios that are mpm wake capable are enabled.
  * The following list disables the gpios explicitly
  */
-static const unsigned int config_mpm_wake_disable_gpios[] = { 151, 202 };
-
-static void lahaina_pinctrl_config_mpm_wake_disable_gpios(void)
-{
-	unsigned int i;
-	unsigned int n_gpios = ARRAY_SIZE(config_mpm_wake_disable_gpios);
-
-	for (i = 0; i < n_gpios; i++)
-		msm_gpio_mpm_wake_set(config_mpm_wake_disable_gpios[i], false);
-}
-
-static int lahaina_pinctrl_no_wake_probe(struct platform_device *pdev)
-{
-	const __be32 *prop;
-	uint32_t *no_wake_gpios;
-	int i, length;
-
-	prop = of_get_property(pdev->dev.of_node, "no-wake-gpios", &length);
-	if (!prop)
-		return -ENOENT;
-
-	length = length / sizeof(u32);
-
-	no_wake_gpios = devm_kzalloc(&pdev->dev, length * sizeof(uint32_t), GFP_KERNEL);
-	if (!no_wake_gpios)
-		return -ENOMEM;
-
-	for (i = 0; i < length; i++)
-		no_wake_gpios[i] = be32_to_cpu(prop[i]);
-
-	lahaina_pinctrl.no_wake_gpios = no_wake_gpios;
-	lahaina_pinctrl.n_no_wake_gpios = length;
-
-	return 0;
-}
 
 static int lahaina_pinctrl_probe(struct platform_device *pdev)
 {
-	int length, ret;
+#ifdef CONFIG_LGE_PM
+	int len = 0;
+	int rc = 0;
+	int i = 0;
+	struct property *gpios;
 
-	if (of_find_property(pdev->dev.of_node, "no-wake-gpios", &length)) {
-		ret = lahaina_pinctrl_no_wake_probe(pdev);
-		if (ret)
-			return ret;
+	if (!pdev->dev.of_node) {
+		goto exit;
 	}
 
-	ret = msm_pinctrl_probe(pdev, &lahaina_pinctrl);
-	if (ret)
-		return ret;
+	gpios = of_find_property(pdev->dev.of_node, "lge,access-denied-gpios", &len);
+	if (!gpios) {
+		printk(KERN_ERR "cannot get access-denied-gpios property\n");
+		goto exit;
+	}
 
-	lahaina_pinctrl_config_mpm_wake_disable_gpios();
+	len /= sizeof(u32);
+	if (len < 1) {
+		printk(KERN_ERR "access-denied-gpios length is abnormal, %d\n", len);
+		goto exit;
+	}
 
-	return 0;
+	printk(KERN_ERR "lge access-denied-gpios, %d\n", len);
+
+	access_denied_list = devm_kmalloc_array(&pdev->dev, len, sizeof(int), GFP_KERNEL);
+	if (!access_denied_list) {
+		printk(KERN_ERR "access_denied_list array malloc failed\n");
+		goto exit_malloc;
+	}
+
+	rc = of_property_read_u32_array(pdev->dev.of_node,
+			"lge,access-denied-gpios", access_denied_list, len);
+	if (rc) {
+		printk(KERN_ERR "property array read fail, %d\n", rc);
+		goto exit_malloc;
+	}
+
+	for (i = 0; i < len; i++)
+		printk(KERN_ERR "access_denied_list[%d] = %d\n", i, access_denied_list[i]);
+
+	access_denied_cnt = len;
+#if !defined(CONFIG_LGE_MME_TEST) && (defined (CONFIG_LGE_RESERVED_GPIO_BLM) || defined (CONFIG_LGE_RESERVED_GPIO_RAINBOWLM))
+	set_lahaina_reserved_gpios(pdev);
+#endif
+	return msm_pinctrl_probe(pdev, &lahaina_pinctrl);
+
+exit_malloc:
+	kfree(access_denied_list);
+exit:
+	access_denied_list = NULL;
+	access_denied_cnt = 0;
+
+#if !defined(CONFIG_LGE_MME_TEST) && (defined (CONFIG_LGE_RESERVED_GPIO_BLM) || defined (CONFIG_LGE_RESERVED_GPIO_RAINBOWLM))
+	set_lahaina_reserved_gpios(pdev);
+#endif
+	return msm_pinctrl_probe(pdev, &lahaina_pinctrl);
+#else
+#if !defined(CONFIG_LGE_MME_TEST) && (defined (CONFIG_LGE_RESERVED_GPIO_BLM) || defined (CONFIG_LGE_RESERVED_GPIO_RAINBOWLM))
+	set_lahaina_reserved_gpios(pdev);
+#endif
+	return msm_pinctrl_probe(pdev, &lahaina_pinctrl);
+#endif
 }
 
 static const struct of_device_id lahaina_pinctrl_of_match[] = {

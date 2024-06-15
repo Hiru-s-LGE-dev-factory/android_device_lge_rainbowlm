@@ -51,11 +51,8 @@
 
 #define RW_Kernel_ENG
 
-#define DEBUG
-#undef FMDBG
-#define FMDBG(fmt, args...) pr_debug("rtc6226: " fmt, ##args)
+#define FMDBG(fmt, args...) pr_info("rtc6226: " fmt, ##args)
 
-#undef FMDERR
 #define FMDERR(fmt, args...) pr_err("rtc6226: " fmt, ##args)
 
 /* driver definitions */
@@ -146,8 +143,12 @@
 #define BD_DATA                     15      /* Block D data */
 #define RDSD_RDSD                   0xffff  /* [15:00] RDS Block D Data */
 
+#define SEEKCFG3					0x10
+#define CSR_SEEKING_NOISE_TH		0xfe00	/* [15:09] SPIKE TH */
+
 #define AUDIOCFG					0x12
-#define AUDIOCFG_CSR0_VOL_AUTOFIX   0x0800  //[11:11] LSB Volume Bit Auto Fix(1)
+#define AUDIOCFG_CSR0_VOL_AUTOFIX   0x0800  /* [11:11] LSB Volume Bit Auto Fix(1) */
+#define CSR_FM_IF_EST_TH			0x001f	/* [04:00] DC TH */
 
 #define RADIOCFG					0x13
 #define CHANNEL_CSR0_CHSPACE        0x1f00  /* [12:08] Channel Sapcing */
@@ -200,7 +201,7 @@
 #define SCAN_PENDING 3
 #define START_SCAN 1
 #define TUNE_TIMEOUT_MSEC 3000
-#define SEEK_TIMEOUT_MSEC 30000
+#define SEEK_TIMEOUT_MSEC 15000
 
 #define RTC6226_MIN_SRCH_MODE 0x00
 #define RTC6226_MAX_SRCH_MODE 0x02
@@ -363,6 +364,8 @@
 #define V4L2_CID_PRIVATE_RDS_SYNC	    (RW_PRIBASE + (CHIPID<<4) + 5)
 #define V4L2_CID_PRIVATE_SI	            (RW_PRIBASE + (CHIPID<<4) + 6)
 
+#define V4L2_CID_PRIVATE_CSR0_SEEKDCTH  (RW_PRIBASE + (CHIPID<<4) + 7)
+#define V4L2_CID_PRIVATE_CSR0_SEEKSPIKETH (RW_PRIBASE + (CHIPID<<4) + 8)
 #define NO_WAIT				2
 #define RDS_WAITING			5
 #define SEEK_CANCEL			6
@@ -459,7 +462,6 @@ struct fm_power_vreg_data {
 	/* voltage levels to be set */
 	unsigned int low_vol_level;
 	unsigned int high_vol_level;
-	int vdd_load;
 	/* is this regulator enabled? */
 	bool is_enabled;
 };
@@ -571,6 +573,8 @@ enum search_t {
 	SCAN,
 	SCAN_FOR_STRONG,
 };
+
+#define INDEX_108MHZ 10800
 
 /**************************************************************************
  * Frequency Multiplicator

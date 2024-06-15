@@ -766,6 +766,12 @@ static const struct attribute_group ufs_sysfs_attributes_group = {
 	.attrs = ufs_sysfs_attributes,
 };
 
+#ifdef CONFIG_LFS_UFSDBG_TUNABLES
+#define IMPORT_TO_UFS_SYSFS
+#include "ufsdbg-tunables.c"
+#undef IMPORT_TO_UFS_SYSFS
+#endif
+
 static const struct attribute_group *ufs_sysfs_groups[] = {
 	&ufs_sysfs_default_group,
 	&ufs_sysfs_device_descriptor_group,
@@ -776,6 +782,9 @@ static const struct attribute_group *ufs_sysfs_groups[] = {
 	&ufs_sysfs_string_descriptors_group,
 	&ufs_sysfs_flags_group,
 	&ufs_sysfs_attributes_group,
+#ifdef CONFIG_LFS_UFSDBG_TUNABLES
+	&ufs_sysfs_tunables_group,
+#endif
 	NULL,
 };
 
@@ -846,7 +855,7 @@ static ssize_t dyn_cap_needed_attribute_show(struct device *dev,
 
 	pm_runtime_get_sync(hba->dev);
 	ret = ufshcd_query_attr(hba, UPIU_QUERY_OPCODE_READ_ATTR,
-			QUERY_ATTR_IDN_DYN_CAP_NEEDED, lun, 0, &value);
+		QUERY_ATTR_IDN_DYN_CAP_NEEDED, lun, 0, &value);
 	pm_runtime_put_sync(hba->dev);
 	if (ret)
 		return -EINVAL;

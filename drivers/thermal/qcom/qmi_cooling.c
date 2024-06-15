@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -76,25 +76,7 @@ static char  device_clients[][QMI_CLIENT_NAME_LENGTH] = {
 	{"cdsp_sw"},
 	{"cdsp_hw"},
 	{"cpuv_restriction_cold"},
-	{"cpr_cold"},
-	{"modem_lte_dsc"},
-	{"modem_nr_dsc"},
-	{"modem_nr_scg_dsc"},
-	{"sdr0_lte_dsc"},
-	{"sdr1_lte_dsc"},
-	{"sdr0_nr_dsc"},
-	{"sdr1_nr_dsc"},
-	{"pa_lte_sdr0_dsc"},
-	{"pa_lte_sdr1_dsc"},
-	{"pa_nr_sdr0_dsc"},
-	{"pa_nr_sdr1_dsc"},
-	{"pa_nr_sdr0_scg_dsc"},
-	{"pa_nr_sdr1_scg_dsc"},
-	{"mmw0_dsc"},
-	{"mmw1_dsc"},
-	{"mmw2_dsc"},
-	{"mmw3_dsc"},
-	{"mmw_ific_dsc"},
+	{"cpr_cold"}
 };
 
 static int qmi_get_max_state(struct thermal_cooling_device *cdev,
@@ -207,6 +189,11 @@ static int qmi_set_cur_state(struct thermal_cooling_device *cdev,
 	ret = qmi_tmd_send_state_request(qmi_cdev, (uint8_t)state);
 
 	qmi_cdev->mtgn_state = state;
+
+#ifdef CONFIG_LGE_PM_DEBUG
+	pr_info_ratelimited("%s: cdev[%s] set state=%d\n",
+                         __func__, qmi_cdev->cdev_name, state);
+#endif
 
 	return ret;
 }

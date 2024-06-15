@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  */
-
-#define pr_fmt(fmt) "subsys-pil-tz: %s(): " fmt, __func__
 
 #include <linux/kernel.h>
 #include <linux/err.h>
@@ -146,7 +144,6 @@ enum pas_id {
 static struct icc_path *scm_perf_client;
 static int scm_pas_bw_count;
 static DEFINE_MUTEX(scm_pas_bw_mutex);
-static int is_inited;
 
 static void subsys_disable_all_irqs(struct pil_tz_data *d);
 static void subsys_enable_all_irqs(struct pil_tz_data *d);
@@ -181,7 +178,7 @@ static int scm_pas_enable_bw(void)
 {
 	int ret = 0;
 
-	if (IS_ERR(scm_perf_client))
+	if (!scm_perf_client)
 		return -EINVAL;
 
 	mutex_lock(&scm_pas_bw_mutex);
@@ -758,6 +755,10 @@ static struct pil_reset_ops pil_ops_trusted = {
 	.deinit_image = pil_deinit_image_trusted,
 };
 
+#ifdef CONFIG_LGE_HANDLE_PANIC
+int qct_wcnss_crash;
+#endif
+
 static void log_failure_reason(const struct pil_tz_data *d)
 {
 	size_t size;
@@ -780,6 +781,11 @@ static void log_failure_reason(const struct pil_tz_data *d)
 
 	strlcpy(reason, smem_reason, min(size, (size_t)MAX_SSR_REASON_LEN));
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
+
+#ifdef CONFIG_LGE_HANDLE_PANIC
+	if(strstr(name, "modem") && strstr(reason, "wlan_process:1"))
+		qct_wcnss_crash = 1;
+#endif
 }
 
 static int subsys_shutdown(const struct subsys_desc *subsys, bool force_stop)
@@ -1345,7 +1351,7 @@ static int pil_tz_generic_probe(struct platform_device *pdev)
 	 * is not yet registered. Return error if that driver returns with
 	 * any error other than EPROBE_DEFER.
 	 */
-	if (!is_inited)
+	if (!scm_perf_client)
 		return -EPROBE_DEFER;
 	if (IS_ERR(scm_perf_client))
 		return PTR_ERR(scm_perf_client);
@@ -1441,7 +1447,7 @@ static int pil_tz_generic_probe(struct platform_device *pdev)
 		if (IS_ERR(d->rmb_gp_reg)) {
 			dev_err(&pdev->dev, "Invalid resource for rmb_gp_reg\n");
 			rc = PTR_ERR(d->rmb_gp_reg);
-			goto load_from_pil;
+			goto err_ramdump;
 		}
 
 		rmb_gp_reg_val = __raw_readl(d->rmb_gp_reg);
@@ -1456,7 +1462,7 @@ static int pil_tz_generic_probe(struct platform_device *pdev)
 			pr_info("spss is brought out of reset by UEFI\n");
 			d->subsys_desc.powerup = subsys_powerup_boot_enabled;
 		}
-load_from_pil:
+
 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 						"sp2soc_irq_status");
 		d->irq_status = devm_ioremap_resource(&pdev->dev, res);
@@ -1583,7 +1589,6 @@ static int pil_tz_scm_pas_probe(struct platform_device *pdev)
 		ret = PTR_ERR(scm_perf_client);
 		pr_err("scm-pas: Unable to register bus client: %d\n", ret);
 	}
-	is_inited = 1;
 
 	return ret;
 }

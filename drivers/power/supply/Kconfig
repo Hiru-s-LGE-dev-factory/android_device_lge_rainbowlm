@@ -407,7 +407,7 @@ config BATTERY_TWL4030_MADC
 
 config QTI_BATTERY_CHARGER
 	tristate "QTI Glink battery charger"
-	depends on QTI_PMIC_GLINK && EXTCON
+	depends on QTI_PMIC_GLINK
 	help
 	  Say Y here to enable Qualcomm Technologies, Inc. battery charger
 	  driver which interfaces with the charger firmware running on the
@@ -656,8 +656,7 @@ config BATTERY_GOLDFISH
 
 config BATTERY_RT5033
 	tristate "RT5033 fuel gauge support"
-	depends on I2C
-	select REGMAP_I2C
+	depends on MFD_RT5033
 	help
 	  This adds support for battery fuel gauge in Richtek RT5033 PMIC.
 	  The fuelgauge calculates and determines the battery state of charge
@@ -723,6 +722,29 @@ config CHARGER_WILCO
 	  by the Embedded Controller on the Chromebook named Wilco. Further
 	  information can be found in
 	  Documentation/ABI/testing/sysfs-class-power-wilco
+
+config USE_WIRELESS_CHARGING
+	tristate "IDT P9222 charger diver"
+	default y if CHARGER_IDTP9222_V2 || CHARGER_IDTP9222_V3
+	help
+	  Say Y here to use wireless charging for device
+
+config CHARGER_IDTP9222_V2
+	tristate "IDT P9222 charger diver"
+	depends on I2C && GPIOLIB
+	default n
+	help
+	  Say Y here to use idtp9222-2 charger IC for wireless charging.
+
+config CHARGER_IDTP9222_V3
+	tristate "IDT P9222 charger diver"
+	depends on I2C && GPIOLIB
+	default n
+	help
+	  Say Y here to use idtp9222-3 charger IC for wireless charging.
+
+# CONFIG_LGE_PM
+source "drivers/power/supply/lge/Kconfig"
 
 source "drivers/power/supply/qcom/Kconfig"
 

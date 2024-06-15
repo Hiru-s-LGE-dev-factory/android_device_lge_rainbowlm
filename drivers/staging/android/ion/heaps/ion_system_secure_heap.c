@@ -29,7 +29,6 @@ struct ion_system_secure_heap {
 	bool destroy_heap;
 	struct list_head prefetch_list;
 	struct delayed_work prefetch_work;
-	struct workqueue_struct *prefetch_wq;
 };
 
 struct prefetch_info {
@@ -115,8 +114,13 @@ static void process_one_prefetch(struct ion_heap *sys_heap,
 	memset(&buffer, 0, sizeof(struct ion_buffer));
 	buffer.heap = sys_heap;
 
+#ifndef CONFIG_MIGRATE_HIGHORDER
 	ret = sys_heap->ops->allocate(sys_heap, &buffer, info->size,
 					buffer.flags);
+#else
+	ret = sys_heap->ops->allocate(sys_heap, &buffer, info->size,
+					info->vmid);
+#endif
 	if (ret) {
 		pr_debug("%s: Failed to prefetch 0x%llx, ret = %d\n",
 			 __func__, info->size, ret);
@@ -271,8 +275,7 @@ static int __ion_system_secure_heap_resize(struct ion_heap *heap,
 		goto out_free;
 	}
 	list_splice_tail_init(&items, &secure_heap->prefetch_list);
-	queue_delayed_work(secure_heap->prefetch_wq,
-			   &secure_heap->prefetch_work,
+	queue_delayed_work(system_unbound_wq, &secure_heap->prefetch_work,
 			   shrink ?  msecs_to_jiffies(SHRINK_DELAY) : 0);
 	spin_unlock_irqrestore(&secure_heap->work_lock, flags);
 
@@ -347,15 +350,6 @@ struct ion_heap *ion_system_secure_heap_create(struct ion_platform_heap *unused)
 	INIT_LIST_HEAD(&heap->prefetch_list);
 	INIT_DELAYED_WORK(&heap->prefetch_work,
 			  ion_system_secure_heap_prefetch_work);
-
-	heap->prefetch_wq = alloc_workqueue("system_secure_prefetch_wq",
-					    WQ_UNBOUND | WQ_FREEZABLE, 0);
-	if (!heap->prefetch_wq) {
-		pr_err("Failed to create system secure prefetch workqueue\n");
-		kfree(heap);
-		return ERR_PTR(-ENOMEM);
-	}
-
 	return &heap->heap.ion_heap;
 }
 
@@ -376,9 +370,16 @@ struct page *alloc_from_secure_pool_order(struct ion_msm_system_heap *heap,
 struct page *split_page_from_secure_pool(struct ion_msm_system_heap *heap,
 					 struct ion_buffer *buffer)
 {
-	int i, j;
+#ifndef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
+	int i;
+#endif
+	int j;
 	struct page *page;
+#ifndef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
 	unsigned int order;
+#else
+	unsigned int order = 0;
+#endif
 
 	mutex_lock(&heap->split_page_mutex);
 
@@ -392,6 +393,7 @@ struct page *split_page_from_secure_pool(struct ion_msm_system_heap *heap,
 	if (!IS_ERR(page))
 		goto got_page;
 
+#ifndef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
 	for (i = NUM_ORDERS - 2; i >= 0; i--) {
 		order = orders[i];
 		page = alloc_from_secure_pool_order(heap, buffer, order);
@@ -401,6 +403,7 @@ struct page *split_page_from_secure_pool(struct ion_msm_system_heap *heap,
 		split_page(page, order);
 		break;
 	}
+#endif
 	/*
 	 * Return the remaining order-0 pages to the pool.
 	 * SetPagePrivate flag to mark memory as secure.

@@ -394,18 +394,13 @@ static int nfsd_startup_net(int nrservs, struct net *net, const struct cred *cre
 		nn->lockd_up = 1;
 	}
 
-	ret = nfsd_file_cache_start_net(net);
-	if (ret)
-		goto out_lockd;
 	ret = nfs4_state_start_net(net);
 	if (ret)
-		goto out_filecache;
+		goto out_lockd;
 
 	nn->nfsd_net_up = true;
 	return 0;
 
-out_filecache:
-	nfsd_file_cache_shutdown_net(net);
 out_lockd:
 	if (nn->lockd_up) {
 		lockd_down(net);
@@ -420,7 +415,7 @@ static void nfsd_shutdown_net(struct net *net)
 {
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
-	nfsd_file_cache_shutdown_net(net);
+	nfsd_file_cache_purge(net);
 	nfs4_state_shutdown_net(net);
 	if (nn->lockd_up) {
 		lockd_down(net);
@@ -521,7 +516,8 @@ static void nfsd_last_thread(struct svc_serv *serv, struct net *net)
 		return;
 
 	nfsd_shutdown_net(net);
-	pr_info("nfsd: last server has exited, flushing export cache\n");
+	printk(KERN_WARNING "nfsd: last server has exited, flushing export "
+			    "cache\n");
 	nfsd_export_flush(net);
 }
 

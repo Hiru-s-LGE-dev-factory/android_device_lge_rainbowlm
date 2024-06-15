@@ -377,7 +377,7 @@ void native_write_cr0(unsigned long val)
 	unsigned long bits_missing = 0;
 
 set_register:
-	asm volatile("mov %0,%%cr0": "+r" (val) : : "memory");
+	asm volatile("mov %0,%%cr0": "+r" (val), "+m" (__force_order));
 
 	if (static_branch_likely(&cr_pinning)) {
 		if (unlikely((val & X86_CR0_WP) != X86_CR0_WP)) {
@@ -396,7 +396,7 @@ void native_write_cr4(unsigned long val)
 	unsigned long bits_changed = 0;
 
 set_register:
-	asm volatile("mov %0,%%cr4": "+r" (val) : : "memory");
+	asm volatile("mov %0,%%cr4": "+r" (val), "+m" (cr4_pinned_bits));
 
 	if (static_branch_likely(&cr_pinning)) {
 		if (unlikely((val & cr4_pinned_mask) != cr4_pinned_bits)) {
@@ -1336,8 +1336,9 @@ void __init early_cpu_init(void)
 	early_identify_cpu(&boot_cpu_data);
 }
 
-static bool detect_null_seg_behavior(void)
+static void detect_null_seg_behavior(struct cpuinfo_x86 *c)
 {
+#ifdef CONFIG_X86_64
 	/*
 	 * Empirically, writing zero to a segment selector on AMD does
 	 * not clear the base, whereas writing zero to a segment
@@ -1358,43 +1359,10 @@ static bool detect_null_seg_behavior(void)
 	wrmsrl(MSR_FS_BASE, 1);
 	loadsegment(fs, 0);
 	rdmsrl(MSR_FS_BASE, tmp);
-	wrmsrl(MSR_FS_BASE, old_base);
-	return tmp == 0;
-}
-
-void check_null_seg_clears_base(struct cpuinfo_x86 *c)
-{
-	/* BUG_NULL_SEG is only relevant with 64bit userspace */
-	if (!IS_ENABLED(CONFIG_X86_64))
-		return;
-
-	/* Zen3 CPUs advertise Null Selector Clears Base in CPUID. */
-	if (c->extended_cpuid_level >= 0x80000021 &&
-	    cpuid_eax(0x80000021) & BIT(6))
-		return;
-
-	/*
-	 * CPUID bit above wasn't set. If this kernel is still running
-	 * as a HV guest, then the HV has decided not to advertize
-	 * that CPUID bit for whatever reason.	For example, one
-	 * member of the migration pool might be vulnerable.  Which
-	 * means, the bug is present: set the BUG flag and return.
-	 */
-	if (cpu_has(c, X86_FEATURE_HYPERVISOR)) {
+	if (tmp != 0)
 		set_cpu_bug(c, X86_BUG_NULL_SEG);
-		return;
-	}
-
-	/*
-	 * Zen2 CPUs also have this behaviour, but no CPUID bit.
-	 * 0x18 is the respective family for Hygon.
-	 */
-	if ((c->x86 == 0x17 || c->x86 == 0x18) &&
-	    detect_null_seg_behavior())
-		return;
-
-	/* All the remaining ones are affected */
-	set_cpu_bug(c, X86_BUG_NULL_SEG);
+	wrmsrl(MSR_FS_BASE, old_base);
+#endif
 }
 
 static void generic_identify(struct cpuinfo_x86 *c)
@@ -1429,6 +1397,8 @@ static void generic_identify(struct cpuinfo_x86 *c)
 	}
 
 	get_model_name(c); /* Default name */
+
+	detect_null_seg_behavior(c);
 
 	/*
 	 * ESPFIX is a strange bug.  All real CPUs have it.  Paravirt
@@ -1856,7 +1826,7 @@ static void setup_getcpu(int cpu)
 	unsigned long cpudata = vdso_encode_cpunode(cpu, early_cpu_to_node(cpu));
 	struct desc_struct d = { };
 
-	if (boot_cpu_has(X86_FEATURE_RDTSCP) || boot_cpu_has(X86_FEATURE_RDPID))
+	if (boot_cpu_has(X86_FEATURE_RDTSCP))
 		write_rdtscp_aux(cpudata);
 
 	/* Store CPU and node number in limit. */

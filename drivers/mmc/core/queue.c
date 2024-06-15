@@ -201,7 +201,7 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 	q->limits.discard_granularity = card->pref_erase << 9;
 	/* granularity must not be greater than max. discard */
 	if (card->pref_erase > max_discard)
-		q->limits.discard_granularity = SECTOR_SIZE;
+		q->limits.discard_granularity = 0;
 	if (mmc_can_secure_erase_trim(card))
 		blk_queue_flag_set(QUEUE_FLAG_SECERASE, q);
 }
@@ -401,10 +401,8 @@ static void mmc_setup_queue(struct mmc_queue *mq, struct mmc_card *card)
 		     "merging was advertised but not possible");
 	blk_queue_max_segments(mq->queue, mmc_get_max_segments(host));
 
-	if (mmc_card_mmc(card) && card->ext_csd.data_sector_size) {
+	if (mmc_card_mmc(card))
 		block_size = card->ext_csd.data_sector_size;
-		WARN_ON(block_size != 512 && block_size != 4096);
-	}
 
 	blk_queue_logical_block_size(mq->queue, block_size);
 	/*
@@ -504,6 +502,15 @@ int mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card)
 
 	mmc_setup_queue(mq, card);
 	mmc_crypto_setup_queue(host, mq->queue);
+
+#ifdef CONFIG_LFS_MM_BDI_STRICTLIMIT_DIRTY
+	if (mmc_card_sd(card)) {
+		mq->queue->backing_dev_info->capabilities |= BDI_CAP_STRICTLIMIT;
+		bdi_set_min_ratio(mq->queue->backing_dev_info, 0);
+		bdi_set_max_ratio(mq->queue->backing_dev_info, 10);
+	}
+#endif
+
 	return 0;
 
 free_tag_set:
@@ -531,6 +538,13 @@ void mmc_queue_resume(struct mmc_queue *mq)
 void mmc_cleanup_queue(struct mmc_queue *mq)
 {
 	struct request_queue *q = mq->queue;
+
+#ifdef CONFIG_LFS_MM_BDI_STRICTLIMIT_DIRTY
+	if (mq->card && mmc_card_sd(mq->card)) {
+		bdi_set_min_ratio(mq->queue->backing_dev_info, 0);
+		bdi_set_max_ratio(mq->queue->backing_dev_info, 100);
+	}
+#endif
 
 	/*
 	 * The legacy code handled the possibility of being suspended,

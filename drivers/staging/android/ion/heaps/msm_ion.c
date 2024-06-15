@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/err.h>
@@ -23,12 +23,6 @@
 #define ION_NOT_READY 0
 #define ION_INIT_FAILURE 1
 #define ION_READY 2
-
-#ifdef CONFIG_PANIC_ON_MSM_ION_HEAPS_FAILURE
-#define MSM_ION_WARN(fmt...) panic(fmt)
-#else /* CONFIG_PANIC_ON_MSM_ION_HEAPS_FAILURE */
-#define MSM_ION_WARN(fmt...) WARN(1, fmt)
-#endif /* CONFIG_PANIC_ON_MSM_ION_HEAPS_FAILURE */
 
 static int num_heaps;
 static int status = ION_NOT_READY;
@@ -97,10 +91,6 @@ static struct ion_heap_desc ion_heap_meta[] = {
 		.id	= ION_AUDIO_ML_HEAP_ID,
 		.name	= ION_AUDIO_ML_HEAP_NAME,
 	},
-	{
-		.id	= ION_AUDIO_CARVEOUT_HEAP_ID,
-		.name	= ION_AUDIO_CARVEOUT_HEAP_NAME,
-	},
 };
 
 #define MAKE_HEAP_TYPE_MAPPING(h) { .name = #h, \
@@ -121,6 +111,35 @@ static struct heap_types_info {
 static int msm_ion_debug_heap_show(struct seq_file *s, void *unused)
 {
 	struct msm_ion_heap *msm_heap = s->private;
+#ifdef CONFIG_ION_DEBUGGING
+	struct ion_heap *heap = &msm_heap->ion_heap;
+	struct ion_device *dev = heap->dev;
+	struct rb_node *n;
+	size_t total_size = 0;
+
+	seq_printf(s, "%16s %16s %16s %16s %16s\n", "client", "pid", "thread", "tid", "size");
+
+	seq_puts(s, "------------------------------------------------------------------------------------\n");
+	mutex_lock(&dev->buffer_lock);
+	for (n = rb_first(&dev->buffers); n; n = rb_next(n)) {
+		struct ion_buffer *buffer = rb_entry(n, struct ion_buffer, node);
+		if (buffer->heap->id != heap->id)
+			continue;
+		total_size += buffer->size;
+		seq_printf(s, "%16s %16u %16s %16u %16zu\n",
+						buffer->task_comm, buffer->pid,
+						buffer->thread_comm, buffer->tid,
+						buffer->size);
+	}
+	mutex_unlock(&dev->buffer_lock);
+	seq_puts(s, "------------------------------------------------------------------------------------\n");
+	seq_printf(s, "%16s %16llu\n", "buffers", heap->num_of_buffers);
+	seq_printf(s, "%16s %16llu\n", "total size", heap->num_of_alloc_bytes);
+	seq_printf(s, "%16s %16llu\n", "peak allocated", heap->alloc_bytes_wm);
+	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
+		seq_printf(s, "%16s %16zu\n", "deferred free", heap->free_list_size);
+	seq_puts(s, "------------------------------------------------------------------------------------\n");
+#endif
 
 	if (msm_heap && msm_heap->msm_heap_ops &&
 	    msm_heap->msm_heap_ops->debug_show)
@@ -338,12 +357,8 @@ static int msm_ion_get_heap_type_from_dt_node(struct device_node *node,
 	int i, ret = -EINVAL;
 
 	ret = of_property_read_string(node, "qcom,ion-heap-type", &name);
-	if (ret) {
-		pr_err("Reading %s property in node %s failed with err %d.\n",
-		       "qcom,ion-heap-type", of_node_full_name(node), ret);
+	if (ret)
 		goto out;
-	}
-
 	for (i = 0; i < ARRAY_SIZE(heap_types_info); ++i) {
 		if (!strcmp(heap_types_info[i].name, name)) {
 			*heap_type = heap_types_info[i].heap_type;
@@ -351,9 +366,8 @@ static int msm_ion_get_heap_type_from_dt_node(struct device_node *node,
 			goto out;
 		}
 	}
-
-	pr_err("Unknown heap type: %s. Check and update %s:heap_types_info\n",
-	       name, __FILE__);
+	WARN(1, "Unknown heap type: %s. You might need to update heap_types_info in %s",
+	     name, __FILE__);
 out:
 	return ret;
 }
@@ -376,10 +390,9 @@ static int msm_ion_populate_heap(struct device_node *node,
 			break;
 		}
 	}
-
 	if (ret)
-		MSM_ION_WARN("%s: Unable to populate heap id 0x%x, error: %d\n",
-			     __func__, heap->id, ret);
+		pr_err("%s: Unable to populate heap, error: %d\n", __func__,
+		       ret);
 	return ret;
 }
 
@@ -485,11 +498,7 @@ static int msm_ion_get_heap_dt_data(struct device_node *node,
 		ret = init_reserved_memory(heap, pnode);
 
 	of_node_put(pnode);
-
-	if (ret)
-		MSM_ION_WARN("Failed to parse DT node for heap %s\n",
-			     heap->name);
-
+	WARN(ret, "Failed to parse DT node for heap %s\n", heap->name);
 	return ret;
 }
 

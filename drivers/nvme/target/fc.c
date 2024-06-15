@@ -1994,9 +1994,9 @@ nvmet_fc_fod_op_done(struct nvmet_fc_fcp_iod *fod)
 			return;
 		if (fcpreq->fcp_error ||
 		    fcpreq->transferred_length != fcpreq->transfer_length) {
-			spin_lock_irqsave(&fod->flock, flags);
+			spin_lock(&fod->flock);
 			fod->abort = true;
-			spin_unlock_irqrestore(&fod->flock, flags);
+			spin_unlock(&fod->flock);
 
 			nvmet_req_complete(&fod->req, NVME_SC_INTERNAL);
 			return;
@@ -2152,6 +2152,13 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 	int ret;
 
 	/*
+	 * if there is no nvmet mapping to the targetport there
+	 * shouldn't be requests. just terminate them.
+	 */
+	if (!tgtport->pe)
+		goto transport_error;
+
+	/*
 	 * Fused commands are currently not supported in the linux
 	 * implementation.
 	 *
@@ -2178,8 +2185,7 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 
 	fod->req.cmd = &fod->cmdiubuf.sqe;
 	fod->req.cqe = &fod->rspiubuf.cqe;
-	if (tgtport->pe)
-		fod->req.port = tgtport->pe->port;
+	fod->req.port = tgtport->pe->port;
 
 	/* clear any response payload */
 	memset(&fod->rspiubuf, 0, sizeof(fod->rspiubuf));

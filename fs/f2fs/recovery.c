@@ -229,9 +229,16 @@ out:
 		name = "<encrypted>";
 	else
 		name = raw_inode->i_name;
+#ifdef CONFIG_LFS_F2FS
+	if(err)
+		f2fs_notice(F2FS_I_SB(inode), "%s: ino = %x, name = %s, dir = %lx, err = %d",
+			    __func__, ino_of_node(ipage), name,
+			    IS_ERR(dir) ? 0 : dir->i_ino, err);
+#else
 	f2fs_notice(F2FS_I_SB(inode), "%s: ino = %x, name = %s, dir = %lx, err = %d",
 		    __func__, ino_of_node(ipage), name,
 		    IS_ERR(dir) ? 0 : dir->i_ino, err);
+#endif
 	return err;
 }
 
@@ -331,9 +338,12 @@ static int recover_inode(struct inode *inode, struct page *page)
 		name = "<encrypted>";
 	else
 		name = F2FS_INODE(page)->i_name;
+#ifdef CONFIG_LFS_F2FS
 
+#else
 	f2fs_notice(F2FS_I_SB(inode), "recover_inode: ino = %x, name = %s, inline = %x",
 		    ino_of_node(page), name, raw->i_inline);
+#endif
 	return 0;
 }
 
@@ -554,9 +564,7 @@ static int do_recover_data(struct f2fs_sb_info *sbi, struct inode *inode,
 
 	/* step 1: recover xattr */
 	if (IS_INODE(page)) {
-		err = f2fs_recover_inline_xattr(inode, page);
-		if (err)
-			goto out;
+		f2fs_recover_inline_xattr(inode, page);
 	} else if (f2fs_has_xattr_block(ofs_of_node(page))) {
 		err = f2fs_recover_xattr_data(inode, page);
 		if (!err)
@@ -565,12 +573,8 @@ static int do_recover_data(struct f2fs_sb_info *sbi, struct inode *inode,
 	}
 
 	/* step 2: recover inline data */
-	err = f2fs_recover_inline_data(inode, page);
-	if (err) {
-		if (err == 1)
-			err = 0;
+	if (f2fs_recover_inline_data(inode, page))
 		goto out;
-	}
 
 	/* step 3: recover data indices */
 	start = f2fs_start_bidx_of_node(ofs_of_node(page), inode);
@@ -685,9 +689,16 @@ retry_prev:
 err:
 	f2fs_put_dnode(&dn);
 out:
+#ifdef CONFIG_LFS_F2FS
+	if(err)
+		f2fs_notice(sbi, "recover_data: ino = %lx (i_size: %s) recovered = %d, err = %d",
+		    inode->i_ino, file_keep_isize(inode) ? "keep" : "recover",
+		    recovered, err);
+#else
 	f2fs_notice(sbi, "recover_data: ino = %lx (i_size: %s) recovered = %d, err = %d",
 		    inode->i_ino, file_keep_isize(inode) ? "keep" : "recover",
 		    recovered, err);
+#endif
 	return err;
 }
 
@@ -703,6 +714,9 @@ static int recover_data(struct f2fs_sb_info *sbi, struct list_head *inode_list,
 	curseg = CURSEG_I(sbi, CURSEG_WARM_NODE);
 	blkaddr = NEXT_FREE_BLKADDR(sbi, curseg);
 
+#ifdef CONFIG_LFS_F2FS
+	f2fs_notice(sbi, "Start %s", __func__);
+#endif
 	while (1) {
 		struct fsync_inode_entry *entry;
 
@@ -759,6 +773,9 @@ next:
 	}
 	if (!err)
 		f2fs_allocate_new_segments(sbi, NO_CHECK_TYPE);
+#ifdef CONFIG_LFS_F2FS
+	f2fs_notice(sbi, "Finished %s", __func__);
+#endif
 	return err;
 }
 

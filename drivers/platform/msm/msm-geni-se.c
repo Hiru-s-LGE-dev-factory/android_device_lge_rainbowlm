@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -111,6 +111,8 @@ struct geni_se_device {
 #define HW_VER_MINOR_MASK GENMASK(27, 16)
 #define HW_VER_MINOR_SHFT 16
 #define HW_VER_STEP_MASK GENMASK(15, 0)
+
+static int geni_se_iommu_map_and_attach(struct geni_se_device *geni_se_dev);
 
 /**
  * geni_read_reg_nolog() - Helper function to read from a GENI register
@@ -712,12 +714,6 @@ static int geni_se_rmv_ab_ib(struct geni_se_device *geni_se_dev,
 	bool bus_bw_update_noc = false;
 	int ret = 0;
 
-	if (geni_se_dev->vectors == NULL)
-		return 0;
-
-	if (rsc->skip_bw_vote)
-		return 0;
-
 	if (unlikely(list_empty(&rsc->ab_list) || list_empty(&rsc->ib_list)))
 		return -EINVAL;
 
@@ -805,7 +801,8 @@ int se_geni_clks_off(struct se_geni_rsc *rsc)
 		return -EINVAL;
 
 	geni_se_dev = dev_get_drvdata(rsc->wrapper_dev);
-	if (!geni_se_dev)
+	if (unlikely(!geni_se_dev || !(geni_se_dev->bus_bw ||
+					geni_se_dev->bus_bw_noc)))
 		return -ENODEV;
 
 	clk_disable_unprepare(rsc->se_clk);
@@ -837,7 +834,9 @@ int se_geni_resources_off(struct se_geni_rsc *rsc)
 		return -EINVAL;
 
 	geni_se_dev = dev_get_drvdata(rsc->wrapper_dev);
-	if (!geni_se_dev)
+	if (unlikely(!geni_se_dev ||
+			!(geni_se_dev->bus_bw ||
+					geni_se_dev->bus_bw_noc)))
 		return -ENODEV;
 
 	ret = se_geni_clks_off(rsc);
@@ -861,12 +860,6 @@ static int geni_se_add_ab_ib(struct geni_se_device *geni_se_dev,
 	bool bus_bw_update = false;
 	bool bus_bw_update_noc = false;
 	int ret = 0;
-
-	if (geni_se_dev->vectors == NULL)
-		return 0;
-
-	if (rsc->skip_bw_vote)
-		return 0;
 
 	mutex_lock(&geni_se_dev->geni_dev_lock);
 
@@ -1037,6 +1030,8 @@ int geni_se_resources_init(struct se_geni_rsc *rsc,
 			   unsigned long ab, unsigned long ib)
 {
 	struct geni_se_device *geni_se_dev;
+	int ret = 0;
+	const char *mode = NULL;
 
 	if (unlikely(!rsc || !rsc->wrapper_dev))
 		return -EINVAL;
@@ -1044,10 +1039,6 @@ int geni_se_resources_init(struct se_geni_rsc *rsc,
 	geni_se_dev = dev_get_drvdata(rsc->wrapper_dev);
 	if (unlikely(!geni_se_dev))
 		return -EPROBE_DEFER;
-
-	/* Driver shouldn't crash, if ICC support is not present */
-	if (geni_se_dev->vectors == NULL)
-		return 0;
 
 	if (IS_ERR_OR_NULL(geni_se_dev->bus_bw)) {
 		geni_se_dev->bus_bw = icc_get(geni_se_dev->dev,
@@ -1095,7 +1086,18 @@ int geni_se_resources_init(struct se_geni_rsc *rsc,
 	INIT_LIST_HEAD(&rsc->ab_list);
 	INIT_LIST_HEAD(&rsc->ib_list);
 
-	return 0;
+	ret = of_property_read_string(geni_se_dev->dev->of_node,
+					"qcom,iommu-dma", &mode);
+
+	if ((ret == 0) && (strcmp(mode, "disabled") == 0)) {
+		ret = geni_se_iommu_map_and_attach(geni_se_dev);
+		if (ret)
+			GENI_SE_ERR(geni_se_dev->log_ctx, false, NULL,
+				"%s: Error %d iommu_map_and_attach\n",
+					 __func__, ret);
+	}
+
+	return ret;
 }
 EXPORT_SYMBOL(geni_se_resources_init);
 
@@ -1377,6 +1379,11 @@ int geni_se_qupv3_hw_version(struct device *wrapper_dev, unsigned int *major,
 }
 EXPORT_SYMBOL(geni_se_qupv3_hw_version);
 
+static int geni_se_iommu_map_and_attach(struct geni_se_device *geni_se_dev)
+{
+	return 0;
+}
+
 /**
  * geni_se_iommu_map_buf() - Map a single buffer into QUPv3 context bank
  * @wrapper_dev:	Pointer to the corresponding QUPv3 wrapper core.
@@ -1547,17 +1554,13 @@ void geni_se_dump_dbg_regs(struct se_geni_rsc *rsc, void __iomem *base,
 	u32 se_dma_rx_len_in = 0;
 	u32 se_dma_tx_len = 0;
 	u32 se_dma_tx_len_in = 0;
-	u32 geni_m_irq_en = 0;
-	u32 geni_s_irq_en = 0;
-	u32 geni_dma_tx_irq_en = 0;
-	u32 geni_dma_rx_irq_en = 0;
 	struct geni_se_device *geni_se_dev;
 
 	if (!ipc)
 		return;
 
 	geni_se_dev = dev_get_drvdata(rsc->wrapper_dev);
-	if (!geni_se_dev)
+	if (unlikely(!geni_se_dev || !geni_se_dev->bus_bw))
 		return;
 	if (unlikely(list_empty(&rsc->ab_list) || list_empty(&rsc->ib_list))) {
 		GENI_SE_DBG(ipc, false, NULL, "%s: Clocks not on\n", __func__);
@@ -1579,10 +1582,6 @@ void geni_se_dump_dbg_regs(struct se_geni_rsc *rsc, void __iomem *base,
 	se_dma_rx_len_in = geni_read_reg(base, SE_DMA_RX_LEN_IN);
 	se_dma_tx_len = geni_read_reg(base, SE_DMA_TX_LEN);
 	se_dma_tx_len_in = geni_read_reg(base, SE_DMA_TX_LEN_IN);
-	geni_m_irq_en = geni_read_reg(base, SE_GENI_M_IRQ_EN);
-	geni_s_irq_en = geni_read_reg(base, SE_GENI_S_IRQ_EN);
-	geni_dma_tx_irq_en = geni_read_reg(base, SE_DMA_TX_IRQ_EN);
-	geni_dma_rx_irq_en = geni_read_reg(base, SE_DMA_RX_IRQ_EN);
 
 	GENI_SE_DBG(ipc, false, NULL,
 	"%s: m_cmd0:0x%x, m_irq_status:0x%x, geni_status:0x%x, geni_ios:0x%x\n",
@@ -1594,11 +1593,7 @@ void geni_se_dump_dbg_regs(struct se_geni_rsc *rsc, void __iomem *base,
 	"se_dma_dbg:0x%x, m_cmd_ctrl:0x%x, dma_rxlen:0x%x, dma_rxlen_in:0x%x\n",
 	se_dma_dbg, m_cmd_ctrl, se_dma_rx_len, se_dma_rx_len_in);
 	GENI_SE_DBG(ipc, false, NULL,
-	"dma_txlen:0x%x, dma_txlen_in:0x%x s_irq_status:0x%x\n",
-	se_dma_tx_len, se_dma_tx_len_in, s_irq_status);
-	GENI_SE_DBG(ipc, false, NULL,
-	"dma_txirq_en:0x%x, dma_rxirq_en:0x%x geni_m_irq_en:0x%x geni_s_irq_en:0x%x\n",
-	geni_dma_tx_irq_en, geni_dma_rx_irq_en, geni_m_irq_en, geni_s_irq_en);
+	"dma_txlen:0x%x, dma_txlen_in:0x%x\n", se_dma_tx_len, se_dma_tx_len_in);
 }
 EXPORT_SYMBOL(geni_se_dump_dbg_regs);
 
@@ -1728,9 +1723,7 @@ static int geni_se_probe(struct platform_device *pdev)
 	geni_se_dev->cb_dev = dev;
 	ret = of_property_read_u32(dev->of_node, "qcom,msm-bus,num-paths",
 					&geni_se_dev->num_paths);
-	if (ret) {
-		dev_err(dev, "%s: ICC entry missing in DT node\n", __func__);
-	} else {
+	if (!ret) {
 		geni_se_dev->vectors = get_icc_paths(pdev, geni_se_dev);
 		if (geni_se_dev->vectors == NULL) {
 			dev_err(dev,

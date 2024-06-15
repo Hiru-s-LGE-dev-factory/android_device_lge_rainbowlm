@@ -22,6 +22,10 @@
 #include <linux/sched.h>
 #include <linux/clkdev.h>
 
+#ifdef CONFIG_PROC_FS
+#include <linux/proc_fs.h>
+#endif
+
 #include "clk.h"
 
 static DEFINE_SPINLOCK(enable_lock);
@@ -86,7 +90,7 @@ struct clk_core {
 	struct hlist_node	child_node;
 	struct hlist_head	clks;
 	unsigned int		notifier_count;
-#ifdef CONFIG_DEBUG_FS
+#if defined(CONFIG_DEBUG_FS) || defined(CONFIG_PROC_FS)
 	struct dentry		*dentry;
 	struct hlist_node	debug_node;
 #endif
@@ -637,24 +641,6 @@ static void clk_core_get_boundaries(struct clk_core *core,
 
 	hlist_for_each_entry(clk_user, &core->clks, clks_node)
 		*max_rate = min(*max_rate, clk_user->max_rate);
-}
-
-static bool clk_core_check_boundaries(struct clk_core *core,
-				      unsigned long min_rate,
-				      unsigned long max_rate)
-{
-	struct clk *user;
-
-	lockdep_assert_held(&prepare_lock);
-
-	if (min_rate > core->max_rate || max_rate < core->min_rate)
-		return false;
-
-	hlist_for_each_entry(user, &core->clks, clks_node)
-		if (min_rate > user->max_rate || max_rate < user->min_rate)
-			return false;
-
-	return true;
 }
 
 void clk_hw_set_rate_range(struct clk_hw *hw, unsigned long min_rate,
@@ -2403,11 +2389,6 @@ int clk_set_rate_range(struct clk *clk, unsigned long min, unsigned long max)
 	clk->min_rate = min;
 	clk->max_rate = max;
 
-	if (!clk_core_check_boundaries(clk->core, min, max)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
 	rate = clk_core_get_rate_nolock(clk->core);
 	if (rate < min || rate > max) {
 		/*
@@ -2436,7 +2417,6 @@ int clk_set_rate_range(struct clk *clk, unsigned long min, unsigned long max)
 		}
 	}
 
-out:
 	if (clk->exclusive_count)
 		clk_core_rate_protect(clk->core);
 
@@ -2977,7 +2957,7 @@ EXPORT_SYMBOL_GPL(clk_is_match);
 
 /***        debugfs support        ***/
 
-#ifdef CONFIG_DEBUG_FS
+#if defined(CONFIG_DEBUG_FS) || defined(CONFIG_PROC_FS)
 #include <linux/debugfs.h>
 
 static struct dentry *rootdir;
@@ -3479,9 +3459,10 @@ static u32 debug_suspend;
  */
 void clock_debug_print_enabled(void)
 {
+/*
 	if (likely(!debug_suspend))
 		return;
-
+*/
 	if (!mutex_trylock(&clk_debug_lock))
 		return;
 
@@ -3539,6 +3520,18 @@ static const struct file_operations clk_state_fops = {
 };
 #endif
 
+static int procfs_clk_summary_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, clk_summary_show, PDE_DATA(inode));
+}
+
+static const struct file_operations procfs_clk_summary_fops = {
+	.open		= procfs_clk_summary_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 /**
  * clk_debug_init - lazily populate the debugfs clk directory
  *
@@ -3556,6 +3549,9 @@ static int __init clk_debug_init(void)
 
 	debugfs_create_file("clk_summary", 0444, rootdir, &all_lists,
 			    &clk_summary_fops);
+#ifdef CONFIG_PROC_FS
+	proc_create_data("clk_summary", 0444, NULL, &procfs_clk_summary_fops, &all_lists);
+#endif
 	debugfs_create_file("clk_dump", 0444, rootdir, &all_lists,
 			    &clk_dump_fops);
 	debugfs_create_file("clk_orphan_summary", 0444, rootdir, &orphan_list,
@@ -3617,19 +3613,6 @@ static void clk_core_reparent_orphans_nolock(void)
 			__clk_recalc_accuracies(orphan);
 			__clk_recalc_rates(orphan, 0);
 			__clk_core_update_orphan_hold_state(orphan);
-
-			/*
-			 * __clk_init_parent() will set the initial req_rate to
-			 * 0 if the clock doesn't have clk_ops::recalc_rate and
-			 * is an orphan when it's registered.
-			 *
-			 * 'req_rate' is used by clk_set_rate_range() and
-			 * clk_put() to trigger a clk_set_rate() call whenever
-			 * the boundaries are modified. Let's make sure
-			 * 'req_rate' is set to something non-zero so that
-			 * clk_set_rate_range() doesn't drop the frequency.
-			 */
-			orphan->req_rate = orphan->rate;
 		}
 	}
 }
@@ -3650,14 +3633,6 @@ static int __clk_core_init(struct clk_core *core)
 		return -EINVAL;
 
 	clk_prepare_lock();
-
-	/*
-	 * Set hw->core after grabbing the prepare_lock to synchronize with
-	 * callers of clk_core_fill_parent_index() where we treat hw->core
-	 * being NULL as the clk not being registered yet. This is crucial so
-	 * that clks aren't parented until their parent is fully registered.
-	 */
-	core->hw->core = core;
 
 	ret = clk_pm_runtime_get(core);
 	if (ret)
@@ -3814,10 +3789,8 @@ static int __clk_core_init(struct clk_core *core)
 out:
 	clk_pm_runtime_put(core);
 unlock:
-	if (ret) {
+	if (ret)
 		hlist_del_init(&core->child_node);
-		core->hw->core = NULL;
-	}
 
 	clk_prepare_unlock();
 
@@ -4063,6 +4036,7 @@ __clk_register(struct device *dev, struct device_node *np, struct clk_hw *hw)
 	core->num_parents = init->num_parents;
 	core->min_rate = 0;
 	core->max_rate = ULONG_MAX;
+	hw->core = core;
 
 	ret = clk_core_populate_parent_map(core, init);
 	if (ret)
@@ -4080,7 +4054,7 @@ __clk_register(struct device *dev, struct device_node *np, struct clk_hw *hw)
 		goto fail_create_clk;
 	}
 
-	clk_core_link_consumer(core, hw->clk);
+	clk_core_link_consumer(hw->core, hw->clk);
 
 	ret = __clk_core_init(core);
 	if (!ret)
@@ -4514,19 +4488,20 @@ int clk_notifier_register(struct clk *clk, struct notifier_block *nb)
 	/* search the list of notifiers for this clk */
 	list_for_each_entry(cn, &clk_notifier_list, node)
 		if (cn->clk == clk)
-			goto found;
+			break;
 
 	/* if clk wasn't in the notifier list, allocate new clk_notifier */
-	cn = kzalloc(sizeof(*cn), GFP_KERNEL);
-	if (!cn)
-		goto out;
+	if (cn->clk != clk) {
+		cn = kzalloc(sizeof(*cn), GFP_KERNEL);
+		if (!cn)
+			goto out;
 
-	cn->clk = clk;
-	srcu_init_notifier_head(&cn->notifier_head);
+		cn->clk = clk;
+		srcu_init_notifier_head(&cn->notifier_head);
 
-	list_add(&cn->node, &clk_notifier_list);
+		list_add(&cn->node, &clk_notifier_list);
+	}
 
-found:
 	ret = srcu_notifier_chain_register(&cn->notifier_head, nb);
 
 	clk->core->notifier_count++;
@@ -4551,28 +4526,32 @@ EXPORT_SYMBOL_GPL(clk_notifier_register);
  */
 int clk_notifier_unregister(struct clk *clk, struct notifier_block *nb)
 {
-	struct clk_notifier *cn;
-	int ret = -ENOENT;
+	struct clk_notifier *cn = NULL;
+	int ret = -EINVAL;
 
 	if (!clk || !nb)
 		return -EINVAL;
 
 	clk_prepare_lock();
 
-	list_for_each_entry(cn, &clk_notifier_list, node) {
-		if (cn->clk == clk) {
-			ret = srcu_notifier_chain_unregister(&cn->notifier_head, nb);
-
-			clk->core->notifier_count--;
-
-			/* XXX the notifier code should handle this better */
-			if (!cn->notifier_head.head) {
-				srcu_cleanup_notifier_head(&cn->notifier_head);
-				list_del(&cn->node);
-				kfree(cn);
-			}
+	list_for_each_entry(cn, &clk_notifier_list, node)
+		if (cn->clk == clk)
 			break;
+
+	if (cn->clk == clk) {
+		ret = srcu_notifier_chain_unregister(&cn->notifier_head, nb);
+
+		clk->core->notifier_count--;
+
+		/* XXX the notifier code should handle this better */
+		if (!cn->notifier_head.head) {
+			srcu_cleanup_notifier_head(&cn->notifier_head);
+			list_del(&cn->node);
+			kfree(cn);
 		}
+
+	} else {
+		ret = -ENOENT;
 	}
 
 	clk_prepare_unlock();

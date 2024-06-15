@@ -113,6 +113,15 @@ static inline struct timespec64 tk_xtime(const struct timekeeper *tk)
 	return ts;
 }
 
+#ifdef CONFIG_MACH_LGE
+struct timespec __current_kernel_time(void)
+{
+    struct timekeeper *tk = &tk_core.timekeeper;
+
+    return timespec64_to_timespec(tk_xtime(tk));
+}
+#endif
+
 static void tk_set_xtime(struct timekeeper *tk, const struct timespec64 *ts)
 {
 	tk->xtime_sec = ts->tv_sec;
@@ -1005,8 +1014,9 @@ static int scale64_check_overflow(u64 mult, u64 div, u64 *base)
 	    ((int)sizeof(u64)*8 - fls64(mult) < fls64(rem)))
 		return -EOVERFLOW;
 	tmp *= mult;
+	rem *= mult;
 
-	rem = div64_u64(rem * mult, div);
+	do_div(rem, div);
 	*base = tmp + rem;
 	return 0;
 }
@@ -1236,7 +1246,8 @@ int do_settimeofday64(const struct timespec64 *ts)
 	timekeeping_forward_now(tk);
 
 	xt = tk_xtime(tk);
-	ts_delta = timespec64_sub(*ts, xt);
+	ts_delta.tv_sec = ts->tv_sec - xt.tv_sec;
+	ts_delta.tv_nsec = ts->tv_nsec - xt.tv_nsec;
 
 	if (timespec64_compare(&tk->wall_to_monotonic, &ts_delta) > 0) {
 		ret = -EINVAL;
@@ -1713,6 +1724,9 @@ void timekeeping_resume(void)
 	if (inject_sleeptime) {
 		suspend_timing_needed = false;
 		__timekeeping_inject_sleeptime(tk, &ts_delta);
+
+		pr_info("Suspended for %lu.%03lu seconds\n", ts_delta.tv_sec,
+				ts_delta.tv_nsec / NSEC_PER_MSEC);
 	}
 
 	/* Re-base the last cycle value */

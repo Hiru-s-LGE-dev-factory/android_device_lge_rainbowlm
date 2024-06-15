@@ -915,26 +915,18 @@ static ssize_t fts_driverinfo_show(
 	struct input_dev *input_dev = ts_data->input_dev;
 
 	mutex_lock(&input_dev->mutex);
-	count += scnprintf(buf + count, PAGE_SIZE, "Driver Ver:%s\n", FTS_DRIVER_VERSION);
+	count += snprintf(buf + count, PAGE_SIZE, "Driver Ver:%s\n", FTS_DRIVER_VERSION);
 
 	count += snprintf(buf + count, PAGE_SIZE, "Resolution:(%d,%d)~(%d,%d)\n",
 			pdata->x_min, pdata->y_min, pdata->x_max, pdata->y_max);
 
 	count += snprintf(buf + count, PAGE_SIZE, "Max Touchs:%d\n", pdata->max_touch_number);
 
-	count += scnprintf(buf + count, PAGE_SIZE, "reset gpio:%d,int gpio:%d,irq:%d\n",
+	count += snprintf(buf + count, PAGE_SIZE, "reset gpio:%d,int gpio:%d,irq:%d\n",
 			pdata->reset_gpio, pdata->irq_gpio, ts_data->irq);
 
-	count += scnprintf(buf + count, PAGE_SIZE, "IC ID:0x%02x%02x\n",
+	count += snprintf(buf + count, PAGE_SIZE, "IC ID:0x%02x%02x\n",
 			ts_data->ic_info.ids.chip_idh, ts_data->ic_info.ids.chip_idl);
-	if (ts_data->bus_type == BUS_TYPE_I2C)
-		count += scnprintf(buf + count, PAGE_SIZE, "BUS:%s,addr:0x%x\n",
-				"I2C", ts_data->client->addr);
-	else
-		count += scnprintf(buf + count, PAGE_SIZE,
-				"BUS:%s,mode:%d,max_freq:%d\n", "SPI",
-				ts_data->spi->mode, ts_data->spi->max_speed_hz);
-
 	mutex_unlock(&input_dev->mutex);
 
 	return count;
@@ -1071,7 +1063,17 @@ static ssize_t fts_log_level_store(
 static ssize_t trusted_touch_enable_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	struct fts_ts_data *info = fts_data;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_data *info;
+
+	if (!client)
+		return scnprintf(buf, PAGE_SIZE, "client is null\n");
+
+	info = i2c_get_clientdata(client);
+	if (!info) {
+		FTS_ERROR("info is null\n");
+		return scnprintf(buf, PAGE_SIZE, "info is null\n");
+	}
 
 	return scnprintf(buf, PAGE_SIZE, "%d",
 			atomic_read(&info->trusted_touch_enabled));
@@ -1080,10 +1082,18 @@ static ssize_t trusted_touch_enable_show(struct device *dev,
 static ssize_t trusted_touch_enable_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
-	struct fts_ts_data *info = fts_data;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_data *info;
 	unsigned long value;
 	int err = 0;
 
+	if (!client)
+		return -EIO;
+	info = i2c_get_clientdata(client);
+	if (!info) {
+		FTS_ERROR("info is null\n");
+		return -EIO;
+	}
 	if (count > 2)
 		return -EINVAL;
 	err = kstrtoul(buf, 10, &value);
@@ -1113,7 +1123,17 @@ static ssize_t trusted_touch_enable_store(struct device *dev,
 static ssize_t trusted_touch_event_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	struct fts_ts_data *info = fts_data;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_data *info;
+
+	if (!client)
+		return scnprintf(buf, PAGE_SIZE, "client is null\n");
+
+	info = i2c_get_clientdata(client);
+	if (!info) {
+		FTS_ERROR("info is null\n");
+		return scnprintf(buf, PAGE_SIZE, "info is null\n");
+	}
 
 	return scnprintf(buf, PAGE_SIZE, "%d",
 			atomic_read(&info->trusted_touch_event));
@@ -1122,10 +1142,18 @@ static ssize_t trusted_touch_event_show(struct device *dev,
 static ssize_t trusted_touch_event_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
-	struct fts_ts_data *info = fts_data;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_data *info;
 	unsigned long value;
 	int err = 0;
 
+	if (!client)
+		return -EIO;
+	info = i2c_get_clientdata(client);
+	if (!info) {
+		FTS_ERROR("info is null\n");
+		return -EIO;
+	}
 	if (count > 2)
 		return -EINVAL;
 

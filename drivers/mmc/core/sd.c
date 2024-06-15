@@ -17,7 +17,9 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/mmc.h>
 #include <linux/mmc/sd.h>
-
+#ifdef CONFIG_LFS_MMC
+#include <linux/mmc/slot-gpio.h>
+#endif
 #include "core.h"
 #include "card.h"
 #include "host.h"
@@ -135,9 +137,6 @@ static int mmc_decode_csd(struct mmc_card *card)
 			csd->erase_size = UNSTUFF_BITS(resp, 39, 7) + 1;
 			csd->erase_size <<= csd->write_blkbits - 9;
 		}
-
-		if (UNSTUFF_BITS(resp, 13, 1))
-			mmc_card_set_readonly(card);
 		break;
 	case 1:
 		/*
@@ -172,9 +171,6 @@ static int mmc_decode_csd(struct mmc_card *card)
 		csd->write_blkbits = 9;
 		csd->write_partial = 0;
 		csd->erase_size = 1;
-
-		if (UNSTUFF_BITS(resp, 13, 1))
-			mmc_card_set_readonly(card);
 		break;
 	default:
 		pr_err("%s: unrecognised CSD structure version %d\n",
@@ -283,6 +279,29 @@ static int mmc_read_ssr(struct mmc_card *card)
 				card->ssr.erase_timeout = (et * 1000) / es;
 				card->ssr.erase_offset = eo * 1000;
 			}
+			#ifdef CONFIG_LFS_MMC
+			/* LGE_CHANGE
+			 * Get SPEED_CLASS of SD-card.
+			 * 0:Class0, 1:Class2, 2:Class4, 3:Class6, 4:Class10
+			 * 2014/07/01, B2-BSP-FS@lge.com
+			 */
+			{
+			   unsigned int speed_class_ssr = 0;
+			   speed_class_ssr = UNSTUFF_BITS(card->raw_ssr, 440 - 384, 8);
+			   if(speed_class_ssr < 5)
+			   {
+			     printk(KERN_INFO "[LGE][MMC][%-18s( )] mmc_hostname:%s, %u ==> SPEED_CLASS %s%s%s%s%s\n", __func__,
+				mmc_hostname(card->host), speed_class_ssr,
+				((speed_class_ssr == 4) ? "10" : ""),
+				((speed_class_ssr == 3) ? "6" : ""),
+				((speed_class_ssr == 2) ? "4" : ""),
+				((speed_class_ssr == 1) ? "2" : ""),
+				((speed_class_ssr == 0) ? "0" : ""));
+			   }
+			   else
+			   printk(KERN_INFO "[LGE][MMC][%-18s( )] mmc_hostname:%s, Unknown SPEED_CLASS\n", __func__, mmc_hostname(card->host));
+			}
+			#endif
 		} else {
 			pr_warn("%s: SD Status: Invalid Allocation Unit size\n",
 				mmc_hostname(card->host));
@@ -847,13 +866,11 @@ try_again:
 		return err;
 
 	/*
-	 * In case the S18A bit is set in the response, let's start the signal
-	 * voltage switch procedure. SPI mode doesn't support CMD11.
-	 * Note that, according to the spec, the S18A bit is not valid unless
-	 * the CCS bit is set as well. We deliberately deviate from the spec in
-	 * regards to this, which allows UHS-I to be supported for SDSC cards.
+	 * In case CCS and S18A in the response is set, start Signal Voltage
+	 * Switch procedure. SPI mode doesn't support CMD11.
 	 */
-	if (!mmc_host_is_spi(host) && rocr && (*rocr & 0x01000000)) {
+	if (!mmc_host_is_spi(host) && rocr &&
+	   ((*rocr & 0x41000000) == 0x41000000)) {
 		err = mmc_set_uhs_voltage(host, pocr);
 		if (err == -EAGAIN) {
 			retries--;
@@ -1023,6 +1040,17 @@ static int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
 	bool v18_fixup_failed = false;
 
 	WARN_ON(!host->claimed);
+
+	#ifdef CONFIG_LFS_MMC
+	/* LGE_CHANGE
+	 * When uSD is not inserted, return proper error-value.
+	 */
+	if (!mmc_gpio_get_cd(host)) {
+		printk(KERN_INFO "[LGE][MMC][%-18s( )] sd-no-exist. skip next\n", __func__);
+		err = -ENOMEDIUM;
+		return err;
+	}
+	#endif
 retry:
 	err = mmc_sd_get_cid(host, ocr, cid, &rocr);
 	if (err)
@@ -1214,21 +1242,7 @@ static void mmc_sd_detect(struct mmc_host *host)
 {
 	int err;
 
-#if defined(CONFIG_SDC_QTI)
-	/*
-	 * Try to acquire claim host. If failed to get the lock in 2 sec,
-	 * just return; This is to ensure that when this call is invoked
-	 * due to pm_suspend, not to block suspend for longer duration.
-	 */
-	pm_runtime_get_sync(&host->card->dev);
-	if (!mmc_try_claim_host(host, NULL, 2000)) {
-		pm_runtime_mark_last_busy(&host->card->dev);
-		pm_runtime_put_autosuspend(&host->card->dev);
-		return;
-	}
-#else
-	 mmc_get_card(host->card, NULL);
-#endif
+	mmc_get_card(host->card, NULL);
 
 	/*
 	 * Just check if our card has been removed.
@@ -1397,10 +1411,28 @@ int mmc_attach_sd(struct mmc_host *host)
 {
 	int err;
 	u32 ocr, rocr;
+#ifdef CONFIG_LFS_MMC
+	int i = 0;
+#endif
 
 	WARN_ON(!host->claimed);
 
+#ifdef CONFIG_LFS_MMC
+	for(i = 0; i < 3; i++) {
+		err = mmc_send_app_op_cond(host, 0, &ocr);
+		printk(KERN_ERR "[LGE][%s]mmc_send_app_op_cond : %d\n", __func__, err);
+		if (err) {
+			mmc_power_cycle(host, host->ocr_avail);
+			mmc_go_idle(host);
+			mmc_send_if_cond(host, host->ocr_avail);
+			printk(KERN_ERR "[LGE][%s]after mmc_power_cycle %d\n", __func__, i);
+		} else {
+			break;
+		}
+	}
+#else
 	err = mmc_send_app_op_cond(host, 0, &ocr);
+#endif
 	if (err)
 		return err;
 

@@ -15,6 +15,10 @@
 #include <linux/haven/hcall.h>
 #include <linux/haven/hh_errno.h>
 
+#ifdef CONFIG_LGE_USB_DEBUGGER
+#include <soc/qcom/lge/board_lge.h>
+#endif
+
 #define QC_HYP_SMCCC_CALL_UID                                                  \
 	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32,              \
 			   ARM_SMCCC_OWNER_VENDOR_HYPERVISOR, 0xff01)
@@ -239,6 +243,10 @@ static int __init hh_ctrl_init(void)
 		qc_hyp_calls = true;
 
 	if (qc_hyp_calls) {
+#if defined(CONFIG_LGE_USB_DEBUGGER) && defined(CONFIG_DEBUG_FS)
+		if(lge_get_usb_debugger() > 0)
+			hh_control_hyp_uart(ENABLE);
+#endif
 		ret = hh_sysfs_register();
 		if (ret)
 			return ret;

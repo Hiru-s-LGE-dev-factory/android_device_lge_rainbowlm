@@ -775,6 +775,20 @@ struct ufs_hba {
 	enum ufs_pm_level spm_lvl;
 	struct device_attribute rpm_lvl_attr;
 	struct device_attribute spm_lvl_attr;
+
+#ifdef CONFIG_LFS_UFS_SYSFS_COMMON
+	struct device_attribute health_desc_attr;
+	struct device_attribute show_hba_attr;
+	struct device_attribute dump_config_desc_attr;
+	struct device_attribute dump_unit_desc_attr;
+	struct device_attribute dump_rpmb_unit_desc_attr;
+	struct device_attribute dump_vendor_health_desc_attr;
+	struct device_attribute dump_power_mode_desc_attr;
+#endif
+#ifdef CONFIG_LFS_UFSDBG_TUNABLES
+	void *ufsdbg_tunables;
+#endif
+
 	int pm_op_in_progress;
 
 	/* Auto-Hibernate Idle Timer register value */
@@ -1032,11 +1046,6 @@ struct ufs_hba {
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);
 	ANDROID_KABI_RESERVE(4);
-#ifdef CONFIG_SCSI_UFSHCD_QTI
-	/* distinguish between resume and restore */
-	bool restore;
-	bool abort_triggered_wlun;
-#endif
 };
 
 /* Returns true if clocks can be gated. Otherwise false */
@@ -1467,10 +1476,6 @@ static inline void ufshcd_vops_device_reset(struct ufs_hba *hba)
 	if (hba->vops && hba->vops->device_reset) {
 		hba->vops->device_reset(hba);
 		ufshcd_set_ufs_dev_active(hba);
-		if (ufshcd_is_wb_allowed(hba)) {
-			hba->wb_enabled = false;
-			hba->wb_buf_flush_enabled = false;
-		}
 		ufshcd_update_reg_hist(&hba->ufs_stats.dev_reset, 0);
 	}
 }

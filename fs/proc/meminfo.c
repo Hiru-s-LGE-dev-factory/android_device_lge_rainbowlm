@@ -25,6 +25,10 @@
 #include <linux/seq_buf.h>
 #endif
 
+#ifdef CONFIG_QCOM_MEM_OFFLINE
+extern unsigned long get_totalram_pages_count_inc_offlined(void);
+#endif
+
 void __attribute__((weak)) arch_report_meminfo(struct seq_file *m)
 {
 }

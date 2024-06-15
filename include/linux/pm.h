@@ -21,6 +21,9 @@
  */
 extern void (*pm_power_off)(void);
 extern void (*pm_power_off_prepare)(void);
+#ifdef CONFIG_LGE_POWEROFF_TIMEOUT
+extern void (*pm_power_off_timeout)(void);
+#endif
 
 struct device; /* we have a circular dep with device.h */
 #ifdef CONFIG_VT_CONSOLE_SLEEP
@@ -598,16 +601,7 @@ struct dev_pm_info {
 #endif
 #ifdef CONFIG_PM
 	struct hrtimer		suspend_timer;
-
-/*
- * See https://android-review.googlesource.com/c/kernel/common/+/1483579
- * for more info as to why this #ifdef is here...
- */
-#ifdef __GENKSYMS__
 	unsigned long		timer_expires;
-#else
-	u64			timer_expires;
-#endif
 	struct work_struct	work;
 	wait_queue_head_t	wait_queue;
 	struct wake_irq		*wakeirq;

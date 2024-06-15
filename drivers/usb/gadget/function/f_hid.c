@@ -20,6 +20,10 @@
 #include "u_f.h"
 #include "u_hid.h"
 
+#ifdef CONFIG_LGE_USB_GADGET
+#define MAX_INST_NAME_LEN 40
+#endif
+
 #define HIDG_MINORS	4
 
 static int major, minors;
@@ -41,7 +45,6 @@ struct f_hidg {
 	unsigned char			bInterfaceSubClass;
 	unsigned char			bInterfaceProtocol;
 	unsigned char			protocol;
-	unsigned char			idle;
 	unsigned short			report_desc_length;
 	char				*report_desc;
 	unsigned short			report_length;
@@ -64,6 +67,10 @@ struct f_hidg {
 
 	struct usb_ep			*in_ep;
 	struct usb_ep			*out_ep;
+
+#ifdef CONFIG_LGE_USB_GADGET
+	bool				is_charge;
+#endif
 };
 
 static inline struct f_hidg *func_to_hidg(struct usb_function *f)
@@ -89,7 +96,7 @@ static struct usb_interface_descriptor hidg_interface_desc = {
 static struct hid_descriptor hidg_desc = {
 	.bLength			= sizeof hidg_desc,
 	.bDescriptorType		= HID_DT_HID,
-	.bcdHID				= cpu_to_le16(0x0101),
+	.bcdHID				= 0x0101,
 	.bCountryCode			= 0x00,
 	.bNumDescriptors		= 0x1,
 	/*.desc[0].bDescriptorType	= DYNAMIC */
@@ -218,6 +225,48 @@ static struct usb_descriptor_header *hidg_fs_descriptors[] = {
 	NULL,
 };
 
+#ifdef CONFIG_LGE_USB_GADGET
+static const unsigned char hidg_charge_report_desc[] = {
+	0x06, 0xA0, 0xFF, 0x09, 0xA5, 0xA1, 0x01, 0x09,
+	0xA6, 0x09, 0xA7, 0x15, 0x80, 0x25, 0x7F, 0x75,
+	0x08, 0x95, 0x02, 0x81, 0x02, 0x09, 0xA9, 0x15,
+	0x80, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x02, 0x91,
+	0x02, 0xC0,
+};
+
+static struct usb_interface_descriptor hidg_charge_interface_desc = {
+	.bLength		= sizeof hidg_charge_interface_desc,
+	.bDescriptorType	= USB_DT_INTERFACE,
+	/* .bInterfaceNumber	= DYNAMIC */
+	.bAlternateSetting	= 0,
+	.bNumEndpoints		= 0,
+	.bInterfaceClass	= USB_CLASS_HID,
+	.bInterfaceSubClass	= 0,
+	.bInterfaceProtocol	= 0,
+	/* .iInterface		= DYNAMIC */
+};
+
+static struct usb_descriptor_header *hidg_charge_ss_descriptors[] = {
+	(struct usb_descriptor_header *)&hidg_charge_interface_desc,
+	(struct usb_descriptor_header *)&hidg_desc,
+	NULL,
+};
+
+
+static struct usb_descriptor_header *hidg_charge_hs_descriptors[] = {
+	(struct usb_descriptor_header *)&hidg_charge_interface_desc,
+	(struct usb_descriptor_header *)&hidg_desc,
+	NULL,
+};
+
+
+static struct usb_descriptor_header *hidg_charge_fs_descriptors[] = {
+	(struct usb_descriptor_header *)&hidg_charge_interface_desc,
+	(struct usb_descriptor_header *)&hidg_desc,
+	NULL,
+};
+#endif
+
 /*-------------------------------------------------------------------------*/
 /*                                 Strings                                 */
 
@@ -345,11 +394,6 @@ static ssize_t f_hidg_write(struct file *file, const char __user *buffer,
 
 	spin_lock_irqsave(&hidg->write_spinlock, flags);
 
-	if (!hidg->req) {
-		spin_unlock_irqrestore(&hidg->write_spinlock, flags);
-		return -ESHUTDOWN;
-	}
-
 #define WRITE_COND (!hidg->write_pending)
 try_again:
 	/* write queue */
@@ -370,14 +414,8 @@ try_again:
 	count  = min_t(unsigned, count, hidg->report_length);
 
 	spin_unlock_irqrestore(&hidg->write_spinlock, flags);
-
-	if (!req) {
-		ERROR(hidg->func.config->cdev, "hidg->req is NULL\n");
-		status = -ESHUTDOWN;
-		goto release_write_pending;
-	}
-
 	status = copy_from_user(req->buf, buffer, count);
+
 	if (status != 0) {
 		ERROR(hidg->func.config->cdev,
 			"copy_from_user error\n");
@@ -405,17 +443,14 @@ try_again:
 
 	spin_unlock_irqrestore(&hidg->write_spinlock, flags);
 
-	if (!hidg->in_ep->enabled) {
-		ERROR(hidg->func.config->cdev, "in_ep is disabled\n");
-		status = -ESHUTDOWN;
-		goto release_write_pending;
-	}
-
 	status = usb_ep_queue(hidg->in_ep, req, GFP_ATOMIC);
-	if (status < 0)
+	if (status < 0) {
+		ERROR(hidg->func.config->cdev,
+			"usb_ep_queue error on int endpoint %zd\n", status);
 		goto release_write_pending;
-	else
+	} else {
 		status = count;
+	}
 
 	return status;
 release_write_pending:
@@ -544,14 +579,6 @@ static int hidg_setup(struct usb_function *f,
 		goto respond;
 		break;
 
-	case ((USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE) << 8
-		  | HID_REQ_GET_IDLE):
-		VDBG(cdev, "get_idle\n");
-		length = min_t(unsigned int, length, 1);
-		((u8 *) req->buf)[0] = hidg->idle;
-		goto respond;
-		break;
-
 	case ((USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE) << 8
 		  | HID_REQ_SET_REPORT):
 		VDBG(cdev, "set_report | wLength=%d\n", ctrl->wLength);
@@ -573,14 +600,6 @@ static int hidg_setup(struct usb_function *f,
 			goto respond;
 		}
 		goto stall;
-		break;
-
-	case ((USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE) << 8
-		  | HID_REQ_SET_IDLE):
-		VDBG(cdev, "set_idle\n");
-		length = 0;
-		hidg->idle = value >> 8;
-		goto respond;
 		break;
 
 	case ((USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_INTERFACE) << 8
@@ -642,6 +661,9 @@ static void hidg_disable(struct usb_function *f)
 	struct f_hidg_req_list *list, *next;
 	unsigned long flags;
 
+#ifdef CONFIG_LGE_USB_GADGET
+	if (!hidg->is_charge) {
+#endif
 	usb_ep_disable(hidg->in_ep);
 	usb_ep_disable(hidg->out_ep);
 
@@ -661,6 +683,9 @@ static void hidg_disable(struct usb_function *f)
 
 	hidg->req = NULL;
 	spin_unlock_irqrestore(&hidg->write_spinlock, flags);
+#ifdef CONFIG_LGE_USB_GADGET
+	}
+#endif
 }
 
 static int hidg_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
@@ -794,6 +819,26 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 		goto fail;
 	hidg_interface_desc.bInterfaceNumber = status;
 
+#ifdef CONFIG_LGE_USB_GADGET
+	if (hidg->is_charge) {
+		hidg_charge_interface_desc.iInterface =
+			hidg_interface_desc.iInterface;
+		hidg_charge_interface_desc.bInterfaceNumber =
+			hidg_interface_desc.bInterfaceNumber;
+
+		hidg_desc.desc[0].bDescriptorType = HID_DT_REPORT;
+		hidg_desc.desc[0].wDescriptorLength =
+			cpu_to_le16(hidg->report_desc_length);
+
+		status = usb_assign_descriptors(f,
+				hidg_charge_fs_descriptors,
+				hidg_charge_hs_descriptors,
+				hidg_charge_ss_descriptors,
+				NULL);
+		if (status)
+			goto fail;
+	} else {
+#endif
 	/* allocate instance-specific endpoints */
 	status = -ENODEV;
 	ep = usb_ep_autoconfig(c->cdev->gadget, &hidg_fs_in_ep_desc);
@@ -810,7 +855,6 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 	hidg_interface_desc.bInterfaceSubClass = hidg->bInterfaceSubClass;
 	hidg_interface_desc.bInterfaceProtocol = hidg->bInterfaceProtocol;
 	hidg->protocol = HID_REPORT_PROTOCOL;
-	hidg->idle = 1;
 	hidg_ss_in_ep_desc.wMaxPacketSize = cpu_to_le16(hidg->report_length);
 	hidg_ss_in_comp_desc.wBytesPerInterval =
 				cpu_to_le16(hidg->report_length);
@@ -840,10 +884,12 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 		hidg_fs_out_ep_desc.bEndpointAddress;
 
 	status = usb_assign_descriptors(f, hidg_fs_descriptors,
-			hidg_hs_descriptors, hidg_ss_descriptors,
-			hidg_ss_descriptors);
+			hidg_hs_descriptors, hidg_ss_descriptors, NULL);
 	if (status)
 		goto fail;
+#ifdef CONFIG_LGE_USB_GADGET
+	}
+#endif
 
 	spin_lock_init(&hidg->write_spinlock);
 	hidg->write_pending = 1;
@@ -853,6 +899,9 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 	init_waitqueue_head(&hidg->read_queue);
 	INIT_LIST_HEAD(&hidg->completed_out_req);
 
+#ifdef CONFIG_LGE_USB_GADGET
+	if (!hidg->is_charge) {
+#endif
 	/* create char device */
 	cdev_init(&hidg->cdev, &f_hidg_fops);
 	dev = MKDEV(major, hidg->minor);
@@ -866,6 +915,9 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 		status = PTR_ERR(device);
 		goto del;
 	}
+#ifdef CONFIG_LGE_USB_GADGET
+	}
+#endif
 
 	return 0;
 del:
@@ -1052,6 +1104,30 @@ static void hidg_free_inst(struct usb_function_instance *f)
 	kfree(opts);
 }
 
+#ifdef CONFIG_LGE_USB_GADGET
+static int hidg_set_inst_name(struct usb_function_instance *fi,
+			      const char *name)
+{
+	struct f_hid_opts *opts;
+
+	if (!name)
+		return 0;
+
+	opts = container_of(fi, struct f_hid_opts, func_inst);
+
+	if (!strncmp("charge", name, MAX_INST_NAME_LEN)) {
+		opts->is_charge = true;
+		opts->subclass = 0;
+		opts->protocol = 0;
+		opts->report_desc_length = sizeof(hidg_charge_report_desc);
+		opts->report_desc = (unsigned char *)hidg_charge_report_desc;
+		opts->report_desc_alloc = false;
+	}
+
+	return 0;
+}
+#endif
+
 static struct usb_function_instance *hidg_alloc_inst(void)
 {
 	struct f_hid_opts *opts;
@@ -1062,6 +1138,9 @@ static struct usb_function_instance *hidg_alloc_inst(void)
 	if (!opts)
 		return ERR_PTR(-ENOMEM);
 	mutex_init(&opts->lock);
+#ifdef CONFIG_LGE_USB_GADGET
+	opts->func_inst.set_inst_name = hidg_set_inst_name;
+#endif
 	opts->func_inst.free_func_inst = hidg_free_inst;
 	ret = &opts->func_inst;
 
@@ -1109,10 +1188,16 @@ static void hidg_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_hidg *hidg = func_to_hidg(f);
 
+#ifdef CONFIG_LGE_USB_GADGET
+	if (!hidg->is_charge) {
+#endif
 	device_destroy(hidg_class, MKDEV(major, hidg->minor));
 	cdev_del(&hidg->cdev);
 
 	usb_free_all_descriptors(f);
+#ifdef CONFIG_LGE_USB_GADGET
+	}
+#endif
 }
 
 static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
@@ -1158,6 +1243,9 @@ static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 
 	/* this could me made configurable at some point */
 	hidg->qlen	   = 4;
+#ifdef CONFIG_LGE_USB_GADGET
+	hidg->is_charge    = opts->is_charge;
+#endif
 
 	return &hidg->func;
 }
